@@ -1,12 +1,12 @@
 {
   "accepted_artifacts": [],
   "accepted_source_baseline": {
-    "git_commit": "f7db10c0301a5693fdcce1e945040672188a2343"
+    "git_commit": "1a692c5ec98f335dd38211a0387c36e2e5db120f"
   },
   "active_changes": [
     {
-      "change_id": "FLARE-TRACK-A1-COORDINATION-STATE-001",
-      "contract_ref": "docs/engineering/changes/FLARE-TRACK-A1-COORDINATION-STATE-001.md",
+      "change_id": "FLARE-EXECUTION-LOCAL-FIRST-001",
+      "contract_ref": "docs/engineering/changes/FLARE-EXECUTION-LOCAL-FIRST-001.md",
       "required_artifact_ids": []
     }
   ],
@@ -16,7 +16,7 @@
     "assignment_ref": "docs/engineering/team/FLARE_INTEGRATOR_ASSIGNMENT_v1.json"
   },
   "next_action_change_ids": [
-    "FLARE-TRACK-A1-COORDINATION-STATE-001"
+    "FLARE-EXECUTION-LOCAL-FIRST-001"
   ],
   "open_blockers": [],
   "open_decisions": {
