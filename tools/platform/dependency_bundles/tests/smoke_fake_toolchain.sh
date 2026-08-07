@@ -144,7 +144,7 @@ fi
 MINIKUBE
 chmod +x "$F/bin/minikube"
 make_tool "$F/bin/hadolint" 'Haskell Dockerfile Linter 2.fake'
-make_tool "$F/bin/actionlint" '1.fake'
+make_tool "$F/bin/actionlint" 'v1.fake'
 make_tool "$F/bin/kubeconform" 'v0.fake'
 
 cat > "$F/toolchain.lock.tsv" <<'EOF'
@@ -167,7 +167,7 @@ kubectl	1.fake	fake	-	cli
 helm	3.fake	fake	-	cli
 minikube	1.fake	fake	-	cli
 hadolint	2.fake	fake	-	cli
-actionlint	1.fake	fake	-	cli
+actionlint	v1.fake	fake	-	cli
 kubeconform	0.fake	fake	-	cli
 EOF
 

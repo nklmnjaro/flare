@@ -431,7 +431,7 @@ detect_tool_version() {
       value="$("$bin/hadolint" --version 2>&1 | awk 'NR==1 {print $NF}')"
       ;;
     actionlint)
-      value="$("$bin/actionlint" --version 2>&1 | sed -nE '1{s/^v//;p;q}')"
+      value="$("$bin/actionlint" --version 2>&1 | head -1)"
       ;;
     kubeconform)
       value="$("$bin/kubeconform" -v 2>&1 | sed -nE '1{s/^v//;p;q}')"
