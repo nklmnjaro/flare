@@ -1,0 +1,36 @@
+.DS_Store
+.idea/
+.vscode/
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+
+# Go
+/bin/
+coverage.out
+
+# Node
+node_modules/
+dist/
+.vite/
+coverage/
+
+# Local runtime
+.tmp/
+.cache/
+artifacts/
+*.log
+
+# Secrets
+*.pem
+*.key
+credentials.*
+secrets.*

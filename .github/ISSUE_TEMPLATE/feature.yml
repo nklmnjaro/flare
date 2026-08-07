@@ -1,0 +1,36 @@
+name: Product change
+description: Problem-first feature proposal
+title: "feat: "
+labels: ["type/feature", "status/triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Do not start with the proposed implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+    validations:
+      required: true
+  - type: textarea
+    id: nong
+    attributes:
+      label: Non-goals
+  - type: textarea
+    id: metric
+    attributes:
+      label: Success metric
+  - type: textarea
+    id: risks
+    attributes:
+      label: Failure / security / operational risks
