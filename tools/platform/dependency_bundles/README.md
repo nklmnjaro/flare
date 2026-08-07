@@ -1,12 +1,6 @@
-# Flare canonical dependency-bundle source
+# Canonical dependency bundles v2
 
-Authoritative repository location:
-
-```text
-tools/platform/dependency_bundles/
-```
-
-This source builds the six active engineering-role bundles:
+Profiles:
 
 ```text
 backend
@@ -17,31 +11,26 @@ platform
 linter
 ```
 
-It intentionally does **not** build `all`.
+There is intentionally no reviewer bundle.
 
-Restore contract:
-
-```text
-bundle integrity/safety preflight
-→ target-state preflight
-→ versioned candidate materialize
-→ candidate validation
-→ single atomic `current` switch
-```
-
-A failed candidate must not change the previous `current` environment.
-
-Python environments are stored inside the versioned profile state. Restore does
-not create, delete or replace repository `.venv`; activation uses the selected
-profile's own versioned `venv` directly.
-
-QA2 Foundation bundles intentionally do not include Chromium binaries while
-browser Product E2E remains NOT_APPLICABLE in the current Foundation wave.
-
-Distribution criterion:
+Split:
 
 ```text
-BUNDLE ACCEPTANCE PASS: <profile>
+backend   -> Go + contracts
+frontend  -> Node/pnpm
+qa1       -> Python QA + contracts
+qa2       -> Python QA2
+platform  -> kubectl + helm + minikube
+linter    -> Python quality + Hadolint/actionlint/kubeconform
+reviewer  -> no dependency bundle
 ```
 
-Archive-only `BUNDLE PASS` is not enough.
+The reviewer receives exact source/governance/evidence only. If an executable
+rerun is needed, temporarily provide the exact accepted role bundle being
+reviewed.
+
+Default hard publication budget:
+
+```text
+300 MiB per dependency bundle
+```

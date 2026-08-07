@@ -71,10 +71,10 @@ case "$(uname -m)" in
 esac
 [[ "$OS" == "linux" ]] || die "only Linux bundles are supported"
 
-need_python()    { [[ "$PROFILE" =~ ^(qa1|qa2|platform|linter)$ ]]; }
-need_go()        { [[ "$PROFILE" =~ ^(backend|platform)$ ]]; }
-need_node()      { [[ "$PROFILE" =~ ^(frontend|platform)$ ]]; }
-need_contracts() { [[ "$PROFILE" =~ ^(backend|qa1|platform)$ ]]; }
+need_python()    { [[ "$PROFILE" =~ ^(qa1|qa2|linter)$ ]]; }
+need_go()        { [[ "$PROFILE" == "backend" ]]; }
+need_node()      { [[ "$PROFILE" == "frontend" ]]; }
+need_contracts() { [[ "$PROFILE" =~ ^(backend|qa1)$ ]]; }
 need_browser()   { return 1; }
 
 profile_tools() {
@@ -83,7 +83,7 @@ profile_tools() {
     frontend) printf '%s\n' node pnpm ;;
     qa1)      printf '%s\n' uv python buf protoc ;;
     qa2)      printf '%s\n' uv python ;;
-    platform) printf '%s\n' uv python go gofmt node pnpm kubectl helm minikube hadolint actionlint kubeconform buf protoc ;;
+    platform) printf '%s\n' kubectl helm minikube ;;
     linter)   printf '%s\n' uv python hadolint actionlint kubeconform ;;
   esac
 }
@@ -281,7 +281,7 @@ if need_contracts; then
 fi
 
 if [[ "$PROFILE" == "platform" ]]; then
-  for b in kubectl helm minikube hadolint actionlint kubeconform; do
+  for b in kubectl helm minikube; do
     copy_deref "$BIN/$b" "$PAYLOAD/bin/$b"
   done
 fi
@@ -349,7 +349,7 @@ INCOMPLETE_MARKER=".flare-incomplete"
 MANAGED_MARKER=".flare-managed-profile"
 
 profile_needs_python() {
-  [[ "$PROFILE" =~ ^(qa1|qa2|platform|linter)$ ]]
+  [[ "$PROFILE" =~ ^(qa1|qa2|linter)$ ]]
 }
 
 # Phase B: classify target state before any managed-state mutation.
@@ -442,7 +442,7 @@ write_state_activation() {
 # Flare managed profile activation. Sourced file: never mutate caller shell options/traps.
 _STATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)" || return 1
 _PROFILE="PROFILE_PLACEHOLDER"
-if [[ "$_PROFILE" =~ ^(qa1|qa2|platform|linter)$ ]]; then
+if [[ "$_PROFILE" =~ ^(qa1|qa2|linter)$ ]]; then
   _VENV="$_STATE/venv"
   if [[ ! -x "$_VENV/bin/python" ]]; then
     echo "[flare][ERROR] restored profile venv is incomplete: $_PROFILE" >&2

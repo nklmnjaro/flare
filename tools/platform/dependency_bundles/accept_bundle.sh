@@ -79,7 +79,7 @@ PROFILE="$PROFILE" ACTIVATE="$ACTIVATE" bash --noprofile --norc -c '
   }
 
   case "$PROFILE" in
-    qa1|qa2|platform|linter)
+    qa1|qa2|linter)
       python --version
       ruff --version
       mypy --version
@@ -96,7 +96,7 @@ PROFILE="$PROFILE" ACTIVATE="$ACTIVATE" bash --noprofile --norc -c '
       ;;
   esac
   case "$PROFILE" in
-    backend|platform)
+    backend)
       go version
       gofmt -h >/dev/null 2>&1 || true
       staticcheck -version
@@ -104,13 +104,13 @@ PROFILE="$PROFILE" ACTIVATE="$ACTIVATE" bash --noprofile --norc -c '
       ;;
   esac
   case "$PROFILE" in
-    frontend|platform)
+    frontend)
       node --version
       pnpm --version
       ;;
   esac
   case "$PROFILE" in
-    backend|qa1|platform)
+    backend|qa1)
       buf --version
       protoc --version
       ;;
@@ -120,9 +120,6 @@ PROFILE="$PROFILE" ACTIVATE="$ACTIVATE" bash --noprofile --norc -c '
       kubectl version --client >/dev/null
       helm version --short
       minikube version --short
-      hadolint --version
-      actionlint --version
-      kubeconform -v
       ;;
   esac
 '
@@ -151,7 +148,7 @@ PROFILE="$PROFILE" ACTIVATE="$ACTIVATE" bash --noprofile --norc -c '
   set -e
   source "$ACTIVATE"
   case "$PROFILE" in
-    qa1|qa2|platform|linter) python --version >/dev/null ;;
+    qa1|qa2|linter) python --version >/dev/null ;;
     backend) go version >/dev/null ;;
     frontend) node --version >/dev/null ;;
   esac
