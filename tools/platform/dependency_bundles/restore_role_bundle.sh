@@ -6,16 +6,14 @@ ARCHIVE="${1:?usage: restore_role_bundle.sh BUNDLE.tar.gz /path/to/flare}"
 REPO="${2:?usage: restore_role_bundle.sh BUNDLE.tar.gz /path/to/flare}"
 ARCHIVE="$(realpath "$ARCHIVE")"
 REPO="$(realpath "$REPO")"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SHA_FILE="$ARCHIVE.sha256"
 
 [[ -f "$ARCHIVE" ]] || { echo "[restore-wrapper][ERROR] archive missing" >&2; exit 1; }
 [[ -f "$SHA_FILE" ]] || { echo "[restore-wrapper][ERROR] detached SHA missing" >&2; exit 1; }
 [[ -d "$REPO" ]] || { echo "[restore-wrapper][ERROR] repo missing" >&2; exit 1; }
 
-(
-  cd "$(dirname "$ARCHIVE")"
-  sha256sum -c "$(basename "$SHA_FILE")"
-)
+python3 -S "$HERE/verify_bundle.py" "$ARCHIVE"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

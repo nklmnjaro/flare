@@ -29,7 +29,7 @@ ARCHIVE="$(find "$OUT" -maxdepth 1 -type f \
   exit 1
 }
 
-python3 "$HERE/verify_bundle.py" "$ARCHIVE"
+python3 -S "$HERE/verify_bundle.py" "$ARCHIVE"
 (
   cd "$OUT"
   sha256sum -c "$(basename "$ARCHIVE").sha256"
@@ -38,7 +38,9 @@ python3 "$HERE/verify_bundle.py" "$ARCHIVE"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 TARGET="$TMP/flare"
-mkdir -p "$TARGET"
+mkdir -p "$TARGET/.venv"
+printf 'do-not-touch\n' > "$TARGET/.venv/flare-unmanaged-sentinel"
+UNMANAGED_VENV_BEFORE="$(sha256sum "$TARGET/.venv/flare-unmanaged-sentinel")"
 tar -xzf "$ARCHIVE" -C "$TMP"
 BUNDLE_ROOT="$(find "$TMP" -mindepth 1 -maxdepth 1 -type d \
   -name "flare-dependencies-${PROFILE}-*" -print -quit)"
@@ -66,15 +68,27 @@ echo "[accept] idempotent restore #2"
   echo "[accept][ERROR] idempotent restore changed bundle id" >&2
   exit 1
 }
+UNMANAGED_VENV_AFTER="$(sha256sum "$TARGET/.venv/flare-unmanaged-sentinel")"
+[[ "$UNMANAGED_VENV_AFTER" == "$UNMANAGED_VENV_BEFORE" ]] || {
+  echo "[accept][ERROR] restore mutated unmanaged project .venv" >&2
+  exit 1
+}
 
 echo "[accept] isolated activation smoke"
 PROFILE="$PROFILE" ACTIVATE="$ACTIVATE" bash --noprofile --norc -c '
   set -e
   before="$-"
+  trap ":" USR1
+  before_trap="$(trap -p USR1)"
   source "$ACTIVATE"
   after="$-"
+  after_trap="$(trap -p USR1)"
   [[ "$before" == "$after" ]] || {
     echo "[accept][ERROR] activation changed shell options: $before -> $after" >&2
+    exit 1
+  }
+  [[ "$before_trap" == "$after_trap" ]] || {
+    echo "[accept][ERROR] activation changed caller trap" >&2
     exit 1
   }
 
@@ -123,6 +137,48 @@ PROFILE="$PROFILE" ACTIVATE="$ACTIVATE" bash --noprofile --norc -c '
       ;;
   esac
 '
+
+echo "[accept] intentional RED: activation must reject missing supported tool"
+ACTIVE_STATE="$(readlink -f "$CURRENT")"
+case "$PROFILE" in
+  backend) ACTIVATION_TOOL="$ACTIVE_STATE/bin/staticcheck" ;;
+  frontend) ACTIVATION_TOOL="$ACTIVE_STATE/bin/node" ;;
+  qa1) ACTIVATION_TOOL="$ACTIVE_STATE/bin/buf" ;;
+  qa2) ACTIVATION_TOOL="$ACTIVE_STATE/bin/uv" ;;
+  platform) ACTIVATION_TOOL="$ACTIVE_STATE/bin/kubectl" ;;
+  linter) ACTIVATION_TOOL="$ACTIVE_STATE/bin/hadolint" ;;
+esac
+mv "$ACTIVATION_TOOL" "$ACTIVATION_TOOL.accept-hidden"
+if PROFILE="$PROFILE" ACTIVATE="$ACTIVATE" bash --noprofile --norc -c \
+  'source "$ACTIVATE"' >/dev/null 2>&1; then
+  echo "[accept][ERROR] activation accepted missing supported tool" >&2
+  exit 1
+fi
+mv "$ACTIVATION_TOOL.accept-hidden" "$ACTIVATION_TOOL"
+
+echo "[accept] intentional RED: wrong supported-tool version must preserve current"
+WRONG_VERSION_ROOT="$TMP/wrong-version-${PROFILE}"
+cp -a "$BUNDLE_ROOT" "$WRONG_VERSION_ROOT"
+WRONG_VERSION_ID="${BUILD_ID}-wrong-version"
+sed -i "s/^BUNDLE_ID=.*/BUNDLE_ID=$WRONG_VERSION_ID/" "$WRONG_VERSION_ROOT/profile.env"
+awk -F '\t' 'BEGIN {OFS="\t"}
+  /^#/ {print; next}
+  !changed {$2="0.0.0-intentional-red"; changed=1}
+  {print}
+' "$WRONG_VERSION_ROOT/profile-toolchain.tsv" > "$WRONG_VERSION_ROOT/profile-toolchain.tsv.tmp"
+mv "$WRONG_VERSION_ROOT/profile-toolchain.tsv.tmp" "$WRONG_VERSION_ROOT/profile-toolchain.tsv"
+(
+  cd "$WRONG_VERSION_ROOT"
+  find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+)
+if "${RESTORE_ENV[@]}" "$WRONG_VERSION_ROOT/restore.sh" "$TARGET" >/dev/null 2>&1; then
+  echo "[accept][ERROR] wrong supported-tool version unexpectedly restored" >&2
+  exit 1
+fi
+[[ -L "$CURRENT" && "$(readlink "$CURRENT")" == "$CURRENT_BEFORE" ]] || {
+  echo "[accept][ERROR] wrong-version failure changed previous current" >&2
+  exit 1
+}
 
 echo "[accept] intentional RED: broken candidate must preserve previous current"
 BROKEN_ROOT="$TMP/broken-${PROFILE}"
@@ -192,6 +248,40 @@ fi
 AFTER_PREFLIGHT="$(find "$PREFLIGHT" -type f -o -type l | sort | xargs -r sha256sum 2>/dev/null || true)"
 [[ "$BEFORE_PREFLIGHT" == "$AFTER_PREFLIGHT" ]] || {
   echo "[accept][ERROR] preflight rejection mutated target" >&2
+  exit 1
+}
+
+echo "[accept] intentional RED: stale current preflight must not mutate target"
+STALE="$TMP/stale"
+mkdir -p "$STALE/.flare/profiles/$PROFILE"
+ln -s missing-state "$STALE/.flare/profiles/$PROFILE/current"
+STALE_BEFORE="$(find "$STALE" -type f -o -type l | sort | xargs -r sha256sum 2>/dev/null || true)"
+if "${RESTORE_ENV[@]}" "$BUNDLE_ROOT/restore.sh" "$STALE" >/dev/null 2>&1; then
+  echo "[accept][ERROR] stale current unexpectedly passed" >&2
+  exit 1
+fi
+STALE_AFTER="$(find "$STALE" -type f -o -type l | sort | xargs -r sha256sum 2>/dev/null || true)"
+[[ "$STALE_BEFORE" == "$STALE_AFTER" ]] || {
+  echo "[accept][ERROR] stale-current rejection mutated target" >&2
+  exit 1
+}
+
+echo "[accept] intentional RED: unsafe payload symlink must fail before target mutation"
+UNSAFE="$TMP/unsafe-${PROFILE}"
+cp -a "$BUNDLE_ROOT" "$UNSAFE"
+ln -s ../../../../outside "$UNSAFE/payload/bin/flare-unsafe-link"
+(
+  cd "$UNSAFE"
+  find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+)
+UNSAFE_TARGET="$TMP/unsafe-target"
+mkdir -p "$UNSAFE_TARGET"
+if "${RESTORE_ENV[@]}" "$UNSAFE/restore.sh" "$UNSAFE_TARGET" >/dev/null 2>&1; then
+  echo "[accept][ERROR] unsafe payload symlink unexpectedly restored" >&2
+  exit 1
+fi
+[[ ! -e "$UNSAFE_TARGET/.flare" ]] || {
+  echo "[accept][ERROR] unsafe-link failure mutated target repo" >&2
   exit 1
 }
 

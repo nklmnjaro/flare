@@ -163,9 +163,17 @@ write_profile_manifest() {
     line="$(awk -F '\t' -v n="$tool" 'NR>1 && $1==n {print; exit}' "$GLOBAL_MANIFEST")"
     if [[ -n "$line" ]]; then
       printf '%s\ttrue\t%s\n' "$line" "$PROFILE" >> "$dest"
-    else
-      printf '%s\tunknown\tprofile-contract\t-\tprofile\ttrue\t%s\n' "$tool" "$PROFILE" >> "$dest"
+      continue
     fi
+    if [[ "$tool" == "gofmt" ]]; then
+      line="$(awk -F '\t' 'NR>1 && $1=="go" {
+        OFS="\t"; $1="gofmt"; $5="runtime-companion"; print; exit
+      }' "$GLOBAL_MANIFEST")"
+      [[ -n "$line" ]] || die "profile tool missing from global manifest: go/gofmt"
+      printf '%s\ttrue\t%s\n' "$line" "$PROFILE" >> "$dest"
+      continue
+    fi
+    die "profile tool missing from global manifest: $tool"
   done < <(profile_tools)
 }
 
@@ -370,6 +378,86 @@ target_preflight() {
 
 target_preflight
 
+detect_tool_version() {
+  local state="$1" name="$2"
+  local bin="$state/bin" venv="$state/venv"
+  local value=""
+
+  case "$name" in
+    uv)
+      value="$("$bin/uv" --version 2>&1 | awk 'NR==1 {print $2}')"
+      ;;
+    python)
+      value="$("$venv/bin/python" -c 'import platform; print(platform.python_version())')"
+      ;;
+    go|gofmt)
+      value="$("$bin/go" version 2>&1 | awk '{
+        for (i=1; i<=NF; i++) if ($i ~ /^go[0-9]/) {sub(/^go/, "", $i); print $i; exit}
+      }')"
+      ;;
+    goimports|staticcheck|govulncheck|dlv|protoc-gen-go)
+      value="$("$bin/go" version -m "$bin/$name" 2>/dev/null | \
+        awk '$1=="mod" {print $3; exit}')"
+      ;;
+    golangci-lint)
+      value="$("$bin/golangci-lint" version 2>&1 | \
+        sed -nE '1{s/.*version[[:space:]]+v?([^[:space:]]+).*/\1/p;q}')"
+      ;;
+    buf)
+      value="$("$bin/buf" --version 2>&1 | head -1)"
+      ;;
+    protoc)
+      value="$("$bin/protoc" --version 2>&1 | awk 'NR==1 {print $NF}')"
+      ;;
+    node)
+      value="$("$bin/node" --version 2>&1 | sed -nE '1{s/^v//;p;q}')"
+      ;;
+    pnpm)
+      value="$(PATH="$bin:/usr/bin:/bin" "$bin/pnpm" --version 2>&1 | head -1)"
+      ;;
+    kubectl)
+      value="$("$bin/kubectl" version --client -o json 2>/dev/null | \
+        tr -d '\n ' | sed -nE 's/.*"gitVersion":"v([^"]+)".*/\1/p')"
+      ;;
+    helm)
+      value="$("$bin/helm" version --short 2>&1 | \
+        sed -nE '1{s/^v//;s/\+.*$//;p;q}')"
+      ;;
+    minikube)
+      value="$("$bin/minikube" version --short 2>&1 | \
+        sed -nE '1{s/^v//;p;q}')"
+      ;;
+    hadolint)
+      value="$("$bin/hadolint" --version 2>&1 | awk 'NR==1 {print $NF}')"
+      ;;
+    actionlint)
+      value="$("$bin/actionlint" --version 2>&1 | sed -nE '1{s/^v//;p;q}')"
+      ;;
+    kubeconform)
+      value="$("$bin/kubeconform" -v 2>&1 | sed -nE '1{s/^v//;p;q}')"
+      ;;
+    *)
+      die "no version probe for supported tool: $name"
+      ;;
+  esac
+
+  [[ -n "$value" ]] || die "empty version probe for supported tool: $name"
+  printf '%s\n' "$value"
+}
+
+validate_profile_versions() {
+  local state="$1"
+  local tool expected source sha kind bundled profile actual
+  while IFS=$'\t' read -r tool expected source sha kind bundled profile; do
+    [[ -z "$tool" || "$tool" == \#* ]] && continue
+    [[ -n "$expected" && "$expected" != "unknown" && "$expected" != "-" ]] || \
+      die "supported tool has no declared version: $tool"
+    actual="$(detect_tool_version "$state" "$tool")"
+    [[ "$actual" == "$expected" ]] || \
+      die "$tool version mismatch: expected '$expected', got '$actual'"
+  done < "$state/profile-toolchain.tsv"
+}
+
 verify_postconditions() {
   local state="$1"
   local venv="$state/venv"
@@ -442,13 +530,51 @@ write_state_activation() {
 # Flare managed profile activation. Sourced file: never mutate caller shell options/traps.
 _STATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)" || return 1
 _PROFILE="PROFILE_PLACEHOLDER"
-if [[ "$_PROFILE" =~ ^(qa1|qa2|linter)$ ]]; then
-  _VENV="$_STATE/venv"
-  if [[ ! -x "$_VENV/bin/python" ]]; then
-    echo "[flare][ERROR] restored profile venv is incomplete: $_PROFILE" >&2
-    unset _STATE _PROFILE _VENV
+_VENV="$_STATE/venv"
+
+if [[ ! -f "$_STATE/profile-toolchain.tsv" || ! -f "$_STATE/postconditions.tsv" ]]; then
+  echo "[flare][ERROR] restored profile contract is incomplete: $_PROFILE" >&2
+  unset _STATE _PROFILE _VENV
+  return 1
+fi
+
+while IFS=$'\t' read -r _TOOL _VERSION _SOURCE _SHA _KIND _BUNDLED _MANIFEST_PROFILE; do
+  [[ -z "$_TOOL" || "$_TOOL" == \#* ]] && continue
+  if [[ "$_BUNDLED" != "true" || "$_MANIFEST_PROFILE" != "$_PROFILE" ]]; then
+    echo "[flare][ERROR] invalid supported-tool manifest entry: $_TOOL" >&2
+    unset _STATE _PROFILE _VENV _TOOL _VERSION _SOURCE _SHA _KIND _BUNDLED _MANIFEST_PROFILE
     return 1
   fi
+  if [[ "$_TOOL" == "python" ]]; then
+    _TOOL_PATH="$_VENV/bin/python"
+  else
+    _TOOL_PATH="$_STATE/bin/$_TOOL"
+  fi
+  if [[ ! -x "$_TOOL_PATH" ]]; then
+    echo "[flare][ERROR] supported tool is missing: $_TOOL" >&2
+    unset _STATE _PROFILE _VENV _TOOL _VERSION _SOURCE _SHA _KIND _BUNDLED _MANIFEST_PROFILE _TOOL_PATH
+    return 1
+  fi
+done < "$_STATE/profile-toolchain.tsv"
+
+while IFS=$'\t' read -r _POST_KIND _POST_NAME _POST_EXPECTED; do
+  [[ -z "$_POST_KIND" || "$_POST_KIND" == \#* || "$_POST_KIND" != "command" ]] && continue
+  case "$_POST_NAME" in
+    python|pytest|ruff|mypy|pylint|pre-commit|playwright)
+      _POST_PATH="$_VENV/bin/$_POST_NAME"
+      ;;
+    *)
+      _POST_PATH="$_STATE/bin/$_POST_NAME"
+      ;;
+  esac
+  if [[ ! -x "$_POST_PATH" ]]; then
+    echo "[flare][ERROR] required command is missing: $_POST_NAME" >&2
+    unset _STATE _PROFILE _VENV _POST_KIND _POST_NAME _POST_EXPECTED _POST_PATH
+    return 1
+  fi
+done < "$_STATE/postconditions.tsv"
+
+if [[ "$_PROFILE" =~ ^(qa1|qa2|linter)$ ]]; then
   export VIRTUAL_ENV="$_VENV"
   export PATH="$_VENV/bin:$_STATE/bin:$PATH"
 else
@@ -458,7 +584,8 @@ fi
 export FLARE_REPO_ROOT="REPO_PLACEHOLDER"
 export PLAYWRIGHT_BROWSERS_PATH="$_STATE/playwright"
 echo "[flare] activated profile: $_PROFILE"
-unset _STATE _PROFILE _VENV
+unset _STATE _PROFILE _VENV _TOOL _VERSION _SOURCE _SHA _KIND _BUNDLED \
+  _MANIFEST_PROFILE _TOOL_PATH _POST_KIND _POST_NAME _POST_EXPECTED _POST_PATH
 return 0
 ACT
   sed -i "s/PROFILE_PLACEHOLDER/$PROFILE/g" "$state/activate.sh"
@@ -495,6 +622,7 @@ build_candidate() {
   if [[ -e "$FINAL_STATE" ]]; then
     if [[ ! -e "$FINAL_STATE/$INCOMPLETE_MARKER" ]]; then
       validate_profile_manifest "$FINAL_STATE"
+      validate_profile_versions "$FINAL_STATE"
       verify_postconditions "$FINAL_STATE"
       [[ -x "$FINAL_STATE/activate.sh" ]] || die "existing profile state missing activation"
       return 0
@@ -539,6 +667,7 @@ build_candidate() {
 
   write_state_activation "$FINAL_STATE"
   validate_profile_manifest "$FINAL_STATE"
+  validate_profile_versions "$FINAL_STATE"
   verify_postconditions "$FINAL_STATE"
   bash -n "$FINAL_STATE/activate.sh"
   rm -f "$FINAL_STATE/$INCOMPLETE_MARKER"

@@ -116,6 +116,8 @@ def check_archive(path: Path) -> list[str]:
             text = restore.read_text(encoding='utf-8')
             required_restore_contract = [
                 'target_preflight',
+                'detect_tool_version',
+                'validate_profile_versions',
                 'build_candidate',
                 'commit_current',
                 'Single authoritative commit point',
@@ -123,6 +125,7 @@ def check_archive(path: Path) -> list[str]:
                 '--frozen',
                 '--offline',
                 '$PROFILE_ROOT/current/activate.sh',
+                'supported tool is missing',
             ]
             for token in required_restore_contract:
                 if token not in text:
