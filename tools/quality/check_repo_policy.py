@@ -1,3 +1,4 @@
+# flare-bootstrap-managed: v1
 from __future__ import annotations
 
 import argparse
@@ -21,10 +22,10 @@ REQUIRED = (
 
 CONVENTIONAL_PR = re.compile(
     r"^(feat|fix|docs|style|refactor|test|chore|ci|build|perf|revert)"
-    r"(\([a-z0-9-]+\))?: .{1,}$"
+    r"(\([a-z0-9-]+\))?: .+$"
 )
 
-FORBIDDEN_TRACKED = {
+FORBIDDEN_NAMES = {
     ".env",
     "credentials.json",
     "id_rsa",
@@ -39,20 +40,21 @@ def check() -> list[str]:
             errors.append(f"missing required repository file: {rel}")
 
     title = os.environ.get("PR_TITLE", "").strip()
-    if title and not CONVENTIONAL_PR.fullmatch(title):
-        errors.append(
-            "PR title must use Conventional Commits style, e.g. "
-            "'feat(ingest): accept event batch'"
-        )
-    if len(title) > 72:
-        errors.append("PR title must be <= 72 characters")
+    if title:
+        if len(title) > 72:
+            errors.append("PR title must be <= 72 characters")
+        if not CONVENTIONAL_PR.fullmatch(title):
+            errors.append(
+                "PR title must use Conventional Commits style, e.g. "
+                "'feat(ingest): accept event batch'"
+            )
 
     for path in ROOT.rglob("*"):
         if not path.is_file():
             continue
         if any(part in {".git", ".venv", "node_modules"} for part in path.parts):
             continue
-        if path.name in FORBIDDEN_TRACKED:
+        if path.name in FORBIDDEN_NAMES:
             errors.append(f"forbidden tracked-looking file: {path.relative_to(ROOT)}")
 
     return errors
