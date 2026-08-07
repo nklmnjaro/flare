@@ -1,3 +1,4 @@
+# flare-bootstrap-managed: v1
 name: Repo policy
 
 on:
@@ -11,13 +12,14 @@ permissions:
 
 jobs:
   repo-policy:
+    name: repo-policy
     runs-on: ubuntu-latest
-    env:
-      PR_TITLE: ${{ github.event.pull_request.title || '' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          python-version: "3.13"
-      - name: Check repository policy
-        run: make check-fast
+          persist-credentials: false
+      - name: Repository policy
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title || '' }}
+        run: python3 tools/quality/check_repo_policy.py

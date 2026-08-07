@@ -1,24 +1,25 @@
+<!-- flare-bootstrap-managed: v1 -->
 # START HERE
 
-## Product
+## What is Flare?
 
 Flare is a test-execution observability and investigation platform.
 
-MVP:
+Current MVP promise:
 
 > show a live pytest session and preserve trustworthy evidence.
 
-## Current architecture boundary
+## Current MVP topology
 
 ```text
 flare-pytest
-  ↓
-Go flare-server
-  ↓
-PostgreSQL + S3-compatible storage
-  ↓
+    ↓
+flare-server (Go)
+    ↓
+PostgreSQL + S3-compatible object storage
+    ↓
 SSE
-  ↓
+    ↓
 flare-web
 ```
 
@@ -29,21 +30,24 @@ make doctor
 make check-fast
 ```
 
-## Engineering law
+## Engineering standard
 
-Read:
+Read first:
 
 ```text
 docs/engineering/ENGINEERING_STANDARD.md
 ```
 
-Before implementation:
+Work model:
 
 ```text
-Criticize → Prove → Simplify → Implement → Verify → Harden
+Criticize
+→ Prove
+→ Simplify
+→ Implement minimally
+→ Verify independently
+→ Harden the gate
 ```
 
-## Current production authorization
-
-Production implementation must remain blocked until the accepted FLARE-000
+Production implementation remains blocked until the accepted FLARE-000
 baseline explicitly authorizes it.

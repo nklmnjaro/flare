@@ -1,3 +1,4 @@
+# flare-bootstrap-managed: v1
 name: Bug
 description: Reproducible product or engineering defect
 title: "fix: "
@@ -26,15 +27,11 @@ body:
     id: evidence
     attributes:
       label: Evidence / reproduction
-      description: Commands, logs, contract IDs, screenshots. No secrets.
+      description: Commands, outputs, contract IDs. Never paste secrets.
     validations:
       required: true
   - type: textarea
-    id: risk
-    attributes:
-      label: Impact / risk
-  - type: textarea
-    id: regression
+    id: protection
     attributes:
       label: Regression protection
-      description: What test/gate should prevent recurrence?
+      description: What test or gate should prevent recurrence?

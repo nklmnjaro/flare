@@ -1,3 +1,5 @@
+# flare-bootstrap-managed: v1
+
 .PHONY: doctor check-fast check
 
 doctor:
@@ -7,4 +9,4 @@ check-fast:
 	@python3 tools/quality/check_repo_policy.py
 
 check: check-fast
-	@echo "Full project gates are intentionally not defined until FLARE-000."
+	@echo "Full language/platform gates are added only by reviewed Flare tasks."
