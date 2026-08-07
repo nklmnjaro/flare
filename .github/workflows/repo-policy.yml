@@ -22,4 +22,4 @@ jobs:
       - name: Repository policy
         env:
           PR_TITLE: ${{ github.event.pull_request.title || '' }}
-        run: python3 tools/quality/check_repo_policy.py
+        run: make check-fast
