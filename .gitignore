@@ -31,3 +31,6 @@ artifacts/
 *.key
 credentials.*
 secrets.*
+
+# Flare managed local state and generated artifacts.
+.flare/
