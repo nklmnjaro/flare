@@ -1,45 +1,39 @@
 # flare-bootstrap-managed: v1
 
-export UV_CACHE_DIR ?= $(CURDIR)/.cache/uv
-export STATE_TEST_WORKERS ?= 4
-
-STATE_REPO ?= $(CURDIR)
-STATE_TREE ?= HEAD
-ALLURE_RESULTS ?= $(CURDIR)/.tmp/allure-results
-ALLURE_REPORT ?= $(CURDIR)/.tmp/allure-report
-ALLURE_CONFIG ?= $(CURDIR)/tools/quality/tests/project_state/allurerc.mjs
-ALLURE ?= allure
-ALLURE_PORT ?= 5050
-
-.PHONY: doctor state-check state-static state-test state-allure state-allure-open check-fast check
+.PHONY: doctor bootstrap check-fast check verify diagnose state-check state-static state-test state-allure state-allure-open
 
 doctor:
-	@python3 tools/quality/check_repo_policy.py --doctor
+	@./flare doctor
+
+bootstrap:
+	@./flare bootstrap
 
 state-check:
-	@uv run --frozen --no-sync python -m tools.project_state.cli check --repo $(STATE_REPO) --tree $(STATE_TREE)
+	@./flare state-check
 
 state-static:
-	@uv run --frozen --no-sync ruff format --check tools/project_state tools/quality/source_manifest.py tools/quality/tests/project_state typings
-	@uv run --frozen --no-sync ruff check tools/project_state tools/quality/source_manifest.py tools/quality/tests/project_state typings
-	@uv run --frozen --no-sync mypy tools/project_state tools/quality/source_manifest.py tools/quality/tests/project_state
+	@./flare state-static
 
 state-test:
-	@uv run --frozen --no-sync python -m pytest -q -p no:cacheprovider -n $(STATE_TEST_WORKERS) --dist worksteal tools/quality/tests/project_state
+	@./flare state-test
 
 state-allure:
-	@FLARE_ALLURE_RESULTS=$(ALLURE_RESULTS) uv run --frozen --no-sync python -m pytest -q -p no:cacheprovider -n $(STATE_TEST_WORKERS) --dist worksteal --alluredir $(ALLURE_RESULTS) --clean-alluredir --allure-no-capture tools/quality/tests/project_state
-	@uv run --frozen --no-sync python -m tools.quality.tests.project_state.runtime_evidence $(ALLURE_RESULTS) --repo $(CURDIR) --configured-workers $(STATE_TEST_WORKERS) --configured-distribution worksteal
-	@uv run --frozen --no-sync python -m tools.quality.tests.project_state.allure_audit $(ALLURE_RESULTS)
+	@./flare state-allure
 
-state-allure-open: state-allure
-	@$(ALLURE) generate $(ALLURE_RESULTS) --config $(ALLURE_CONFIG) --output $(ALLURE_REPORT) --open --port $(ALLURE_PORT)
+state-allure-open:
+	@./flare state-allure-open
 
 check-fast:
-	@python3 tools/quality/check_repo_policy.py
+	@./flare check-fast
 
-check: check-fast
-	@echo "Full language/platform gates are added only by reviewed Flare tasks."
+check:
+	@./flare check
+
+verify:
+	@./flare verify
+
+diagnose:
+	@./flare diagnose
 
 # Repository-owned Flare engineering dispatch facade.
 dispatch-doctor:

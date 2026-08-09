@@ -1,0 +1,29 @@
+profile_id = "ubuntu-24.04-x86_64-v1"
+os = "Linux"
+os_release_id = "ubuntu"
+os_release_version = "24.04"
+architecture = "x86_64"
+python_implementation = "cpython"
+python_version = "3.14.7"
+uv_version = "0.12.3"
+project_environment = ".venv"
+project_state = ".flare/local-execution"
+python_install_dir = ".flare/local-execution/python"
+uv_cache = ".cache/uv"
+
+required_host_commands = [
+  "/bin/sh",
+  "/usr/bin/awk",
+  "/usr/bin/git",
+  "/usr/bin/make",
+  "/usr/bin/mkdir",
+  "/usr/bin/uname",
+  "uv",
+]
+exact_version_host_commands = ["uv"]
+discoverable_host_commands = ["/bin/sh", "/usr/bin/awk", "/usr/bin/git", "/usr/bin/make", "/usr/bin/mkdir", "/usr/bin/uname"]
+project_local_reconstruction = ["CPython 3.14.7", "uv.lock dependency environment"]
+integrity_authorities = ["uv-managed Python distribution metadata", "uv.lock artifact hashes"]
+external_package_source_environment = ["UV_INDEX_URL", "UV_EXTRA_INDEX_URL", "UV_KEYRING_PROVIDER"]
+explicitly_untrusted_host_state = ["PATH Python", "existing .venv", "user package cache", "globally importable Python packages", "shell rc files"]
+optional_capabilities = ["allure HTML renderer"]

@@ -27,8 +27,24 @@ flare-web
 
 ```bash
 make doctor
+make bootstrap
+make doctor
 make check-fast
 ```
+
+The currently supported development host profile is declared in
+`tools/local_execution/host_profile.toml`. Bootstrap reconstructs Python and
+locked project dependencies under ignored project-local paths; it does not
+install system packages or modify shell configuration.
+
+The initial proven profile is Ubuntu 24.04 on x86_64. Its deliberately small
+host trust root includes ordinary POSIX/OS tools plus the exact `uv` version
+declared by that profile; Python and project dependencies are not taken from
+`PATH` and are reconstructed locally. External package-source configuration is
+accepted only through the variable names declared in the profile, while the
+portable repository contains no private source or credentials. `make verify`
+adds the expensive isolated twin-checkout reproducibility proof; HTML Allure
+rendering remains optional and does not determine engineering-check status.
 
 ## Engineering standard
 
