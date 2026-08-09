@@ -3,6 +3,10 @@ max_bundle_mib = 300
 artifact_dir = ".flare/artifacts"
 governance_dir = "docs/engineering/governance/rc2"
 
+[principals.product_owner]
+display = "Product Owner / Main Coordinator"
+status = "current"
+
 [roles.backend]
 display = "kolyan_backend"
 timing = "ACT_NOW"
@@ -48,6 +52,7 @@ task = "tasks/analyst.md"
 display = "product_owner"
 timing = "HOLD"
 task = "tasks/product_owner.md"
+principal_refs = ["product_owner"]
 
 [roles.gatekeeper]
 display = "kolyan_gatekeeper"

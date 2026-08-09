@@ -1,0 +1,209 @@
+{
+  "$id": "urn:flare:coordination-state:1.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "accepted_artifacts": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "manifest_ref": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "kind",
+          "manifest_ref",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "accepted_source_baseline": {
+      "additionalProperties": false,
+      "properties": {
+        "git_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "source_artifact_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "git_commit"
+      ],
+      "type": "object"
+    },
+    "active_changes": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "change_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "contract_ref": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "required_artifact_ids": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "change_id",
+          "contract_ref",
+          "required_artifact_ids"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "enforcement_matrix_ref": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "integrator": {
+      "additionalProperties": false,
+      "properties": {
+        "assignee_ref": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "assignment_ref": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "assignee_ref",
+        "assignment_ref"
+      ],
+      "type": "object"
+    },
+    "next_action_change_ids": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "open_blockers": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "blocker_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "blocker_ref": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "blocks_change_ids": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "blocker_id",
+          "blocker_ref",
+          "blocks_change_ids"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "open_decisions": {
+      "additionalProperties": false,
+      "properties": {
+        "product": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "technical": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "product",
+        "technical"
+      ],
+      "type": "object"
+    },
+    "product_phase_ref": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "production_gate_ref": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "project_id": {
+      "const": "flare",
+      "type": "string"
+    },
+    "role_registry_ref": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema_version": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "accepted_artifacts",
+    "accepted_source_baseline",
+    "active_changes",
+    "enforcement_matrix_ref",
+    "integrator",
+    "next_action_change_ids",
+    "open_blockers",
+    "open_decisions",
+    "product_phase_ref",
+    "production_gate_ref",
+    "project_id",
+    "role_registry_ref",
+    "schema_version"
+  ],
+  "title": "Flare coordination state",
+  "type": "object"
+}

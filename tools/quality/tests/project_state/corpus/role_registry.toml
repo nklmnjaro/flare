@@ -1,0 +1,6 @@
+[principals.alice]
+display = "Alice (synthetic fixture principal)"
+status = "current"
+
+[roles.integrator]
+principal_refs = ["alice"]

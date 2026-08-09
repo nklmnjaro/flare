@@ -1,7 +1,11 @@
+---
+change_id: "FLARE-TRACK-A1-COORDINATION-STATE-001"
+status: "ACCEPTED / READY FOR BOUNDED CODE"
+implementation_authorization: "AUTHORIZED"
+---
+
 # Flare Track A.1 — Coordination State Contract v1.0
 
-**Change ID:** `FLARE-TRACK-A1-COORDINATION-STATE-001`
-**Status:** `ACCEPTED / READY FOR BOUNDED CODE`
 **Semantic class:** `BOUNDARY`
 **Risk flags:** `data_integrity`, `operability`, `reliability`
 
@@ -74,8 +78,13 @@ docs/project/CURRENT_STATE.md
 
 `state.json` is the one canonical machine coordination index.
 
-`CURRENT_STATE.md` is generated or mechanically verified from the same validated
-candidate and is never independently authored as a second truth.
+`CURRENT_STATE.md` is a bounded human-readable summary generated or mechanically
+verified from the same validated candidate. It guarantees exact display of the
+project/schema identity, accepted source baseline, product/gate references,
+Integrator principal, active Change identities/contracts, next actions and open
+blockers. It is not a recovery database and is never independently authored as
+a second truth. Complete recovery always starts from `state.json` and its
+referenced authorities.
 
 ## Machine format
 
@@ -258,6 +267,11 @@ one current principal/member.
 `assignment_ref` must resolve to the authoritative basis for that assignment or
 delegation.
 
+The accepted default assignment belongs to `Product Owner / Main Coordinator`.
+The role registry must identify its current structured principal, and the
+referenced assignment record must bind that exact role. A later explicit
+authoritative delegation may replace this default.
+
 Zero/multiple principals or invalid/superseded assignment:
 
 ```text
@@ -368,10 +382,11 @@ Normative stage order:
 ```text
 1. raw bytes
 2. strict JSON parse with duplicate-key rejection
-3. JSON Schema structural validation only
-4. semantic / invariant / reference validation
-5. projection generation + projection validation
-6. publication-specific concurrency checks
+3. accepted JSON Schema structural validation only
+4. strict typed external-state parsing
+5. semantic / invariant / reference validation
+6. projection generation + projection validation
+7. publication-specific concurrency checks
 ```
 
 An earlier failed stage is not reinterpreted by later stages.
@@ -379,6 +394,10 @@ An earlier failed stage is not reinterpreted by later stages.
 JSON Schema validates structure/types/basic format only.
 Repository, artifact, ownership, lifecycle and cross-reference semantics belong
 to semantic/reference validation.
+
+The accepted schema is a closed immutable structural contract. Candidate bytes
+must match its accepted content identity; `$id` alone is not authentication.
+Candidate-controlled external schema resolution is forbidden.
 
 ## Validation result
 
@@ -505,19 +524,69 @@ review semantic payload
 canonical reviewer assignment/scope
 ```
 
-A response aggregator verifies:
+A.1 verifies one structured ReviewResponse at a time:
 
 ```text
 reviewer role
 exact target identity
 exact canonical assigned topics/scope
-duplicate-response supersession
 ```
 
 A stale response from an earlier assignment cannot be reused after reviewer
 scope changes.
 
+A.3 owns collections of responses, duplicate-response identity, supersession
+ordering and authoritative aggregation. A.1 does not define or implement those
+semantics.
+
 This is process-review identity hardening; it is not a `state.json` field.
+
+## A.1 command-evidence security boundary
+
+Raw command argv is execution-only test-support data. It is never stored in the
+durable `CommandResult` or attached to Allure. Durable command presentation is
+constructed from a separately sanitized argv representation, shell-rendered,
+then sanitized again before persistence. Failure diagnostics use only that safe
+presentation and explicit structured failure fields; they never serialize raw
+subprocess exceptions or their argv.
+
+Captured stdout and stderr are decoded, redacted and only then bounded. An
+explicit redaction marker and an explicit truncation marker describe different
+operations.
+
+The supported secret names are exactly, case-insensitively:
+
+```text
+authorization
+password
+secret
+token
+```
+
+The bounded recognized grammar is:
+
+```text
+key=value
+key: value
+optionally single- or double-quoted exact key
+--key=value
+separate argv elements: --key VALUE
+assignment after actual LF or CR
+assignment after literal escaped \n or \r
+```
+
+Embedded source/script arguments containing a recognized assignment are
+replaced as a whole rather than parsed as another language. This contract does
+not claim discovery of unlabelled, differently named, encoded, encrypted or
+obfuscated secrets and is not a generic DLP system.
+
+The A.1 raw-evidence auditor independently searches for the configured exact
+synthetic canary. It does not reuse the producer matcher or infer safety from a
+redaction marker. Accepted textual attachment media types are exactly
+`text/plain` and `application/json`; title does not affect scanning. Missing,
+orphaned, invalid-UTF-8, unknown or binary attachment evidence fails closed for
+this A.1 result set. A future binary-evidence policy requires a separate
+reviewed contract.
 
 ## Mandatory negative scenarios
 
@@ -557,6 +626,9 @@ Future A.1 implementation proof must include at least:
 32. review response targets correct semantic payload but stale reviewer
     assignment.
 
+Round-2 defect-closure regressions use the separate `A1-Cxx` namespace. They
+extend this proof surface without renumbering or redefining `A1-N01..A1-N32`.
+
 ## Non-goals
 
 A.1 does not define:
@@ -571,7 +643,13 @@ CI provider wiring
 product runtime
 FLARE-000 approval
 new gate promotion
+clean-checkout bootstrap or dependency provisioning
 ```
+
+This closure is verified in the available prepared environment and makes no
+clean-checkout reconstruction claim. `FLARE-LOCAL-PIPELINE` owns future
+doctor/preflight, Python and uv convergence, `uv sync --frozen`, and external
+tool provisioning.
 
 ## Ready-for-code gate
 

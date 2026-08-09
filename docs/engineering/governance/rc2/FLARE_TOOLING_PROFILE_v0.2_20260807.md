@@ -27,7 +27,26 @@ project CLI/tested scripts как executable source of truth
 pre-commit — conditional after real hooks exist
 ```
 
-## 2. Python 3.13
+## 2. Python 3.14
+
+Product Owner decision (2026-08-09): Python 3.14 is the current Flare target
+toolchain. This is intentional and applies to new Flare Python tooling and
+tests.
+
+The repository-owned contract must remain aligned across:
+
+```text
+.python-version
+pyproject requires-python
+uv lock
+Ruff target-version
+mypy python_version
+```
+
+Future CI, bootstrap and runtime images must converge on the same contract.
+That synchronization is a follow-up and is not part of A.1. A local AI-agent
+environment can execute the contract, but never replaces repository-owned
+version, dependency or preflight truth.
 
 Package/environment manager:
 
