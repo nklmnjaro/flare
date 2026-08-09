@@ -1,14 +1,15 @@
+<!-- flare-bootstrap-managed: v1 -->
 # Flare
 
 **Test Execution Observability & Investigation Platform**
 
-Current product target:
+MVP promise:
 
 > Flare shows a live pytest session and preserves verifiable evidence so a
 > failure can be understood without manually switching between CI, reports,
 > and fragmented logs.
 
-## Repository
+Repository layout:
 
 ```text
 backend/        Go canonical core
@@ -16,8 +17,8 @@ frontend/       SolidJS / TypeScript UI
 sdk/python/     pytest SDK/plugin
 contracts/      versioned contracts
 deploy/         platform adapters
-docs/           product, architecture, onboarding
-tools/          quality and project tooling
+docs/           product / architecture / onboarding
+tools/          project-owned quality tooling
 ```
 
 Start with:

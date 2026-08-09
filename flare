@@ -1,0 +1,129 @@
+#!/bin/sh
+set -eu
+
+case "$0" in
+    */*) SCRIPT_DIRECTORY=${0%/*} ;;
+    *) SCRIPT_DIRECTORY=. ;;
+esac
+ROOT=$(CDPATH= cd -- "$SCRIPT_DIRECTORY" && pwd -P)
+PROFILE="$ROOT/tools/local_execution/host_profile.toml"
+
+# Host Python environment state is explicitly outside the bootstrap trust root.
+unset VIRTUAL_ENV PYTHONHOME PYTHONPATH
+unset PIP_INDEX_URL PIP_TRUSTED_HOST
+unset UV_DEFAULT_INDEX UV_FIND_LINKS UV_INDEX UV_INDEX_STRATEGY UV_INSECURE_HOST
+unset UV_PYTHON_DOWNLOADS_JSON_URL UV_PYTHON_INSTALL_MIRROR
+
+profile_value() {
+    /usr/bin/awk -F ' = ' -v key="$1" '
+        $1 == key {
+            value = $2
+            gsub(/^"|"$/, "", value)
+            print value
+            exit
+        }
+    ' "$PROFILE"
+}
+
+profile_array_values() {
+    /usr/bin/awk -v key="$1" '
+        $0 ~ "^" key " = \\[" { reading=1; next }
+        reading && /^]/ { exit }
+        reading {
+            value=$0
+            gsub(/[\",]/, "", value)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+            if (length(value)) print value
+        }
+    ' "$PROFILE"
+}
+
+fail() {
+    printf '%s\n' "local-execution: $1" >&2
+    exit 1
+}
+
+[ -f "$PROFILE" ] || fail "missing host profile: tools/local_execution/host_profile.toml"
+
+PROFILE_ID=$(profile_value profile_id)
+EXPECTED_OS=$(profile_value os)
+EXPECTED_RELEASE_ID=$(profile_value os_release_id)
+EXPECTED_RELEASE_VERSION=$(profile_value os_release_version)
+EXPECTED_ARCH=$(profile_value architecture)
+PYTHON_VERSION=$(profile_value python_version)
+UV_VERSION=$(profile_value uv_version)
+
+[ "$(/usr/bin/uname -s)" = "$EXPECTED_OS" ] || fail "unsupported host for $PROFILE_ID: expected os=$EXPECTED_OS"
+[ "$(/usr/bin/uname -m)" = "$EXPECTED_ARCH" ] || fail "unsupported host for $PROFILE_ID: expected architecture=$EXPECTED_ARCH"
+
+[ -f /etc/os-release ] || fail "unsupported host for $PROFILE_ID: /etc/os-release is missing"
+ACTUAL_RELEASE_ID=$(/usr/bin/awk -F= '$1 == "ID" { value=$2; gsub(/^"|"$/, "", value); print value; exit }' /etc/os-release)
+ACTUAL_RELEASE_VERSION=$(/usr/bin/awk -F= '$1 == "VERSION_ID" { value=$2; gsub(/^"|"$/, "", value); print value; exit }' /etc/os-release)
+[ "$ACTUAL_RELEASE_ID" = "$EXPECTED_RELEASE_ID" ] || fail "unsupported host for $PROFILE_ID: expected release=$EXPECTED_RELEASE_ID-$EXPECTED_RELEASE_VERSION, observed=$ACTUAL_RELEASE_ID-$ACTUAL_RELEASE_VERSION"
+[ "$ACTUAL_RELEASE_VERSION" = "$EXPECTED_RELEASE_VERSION" ] || fail "unsupported host for $PROFILE_ID: expected release=$EXPECTED_RELEASE_ID-$EXPECTED_RELEASE_VERSION, observed=$ACTUAL_RELEASE_ID-$ACTUAL_RELEASE_VERSION"
+
+if [ -n "${FLARE_HOST_UV:-}" ]; then
+    UV=$FLARE_HOST_UV
+else
+    UV=$(command -v uv || true)
+fi
+[ -n "$UV" ] && [ -x "$UV" ] || fail "required host uv==$UV_VERSION is missing; install verified uv and rerun"
+
+UV_OUTPUT=$($UV --version 2>/dev/null || true)
+case "$UV_OUTPUT" in
+    "uv $UV_VERSION"|"uv $UV_VERSION "*) ;;
+    *) fail "wrong uv identity/version: expected uv $UV_VERSION, observed ${UV_OUTPUT:-unavailable}" ;;
+esac
+
+for HOST_COMMAND in $(profile_array_values required_host_commands); do
+    case "$HOST_COMMAND" in
+        uv) HOST_PATH=$UV ;;
+        /*) HOST_PATH=$HOST_COMMAND ;;
+        *) HOST_PATH=$(command -v "$HOST_COMMAND" || true) ;;
+    esac
+    [ -n "$HOST_PATH" ] && [ -x "$HOST_PATH" ] || fail "required host command is missing: $HOST_COMMAND"
+done
+
+COMMAND=${1:-help}
+if [ "$#" -gt 0 ]; then
+    shift
+fi
+
+case "$COMMAND" in
+    bootstrap)
+        STATE="$ROOT/.flare/local-execution"
+        /usr/bin/mkdir -p "$STATE/python" "$ROOT/.cache/uv"
+        if ! UV_CACHE_DIR="$ROOT/.cache/uv" \
+            UV_PYTHON_INSTALL_DIR="$STATE/python" \
+                "$UV" python install "$PYTHON_VERSION" --install-dir "$STATE/python" --no-bin; then
+            fail "verified uv failed to install the pinned managed Python $PYTHON_VERSION"
+        fi
+        MANAGED_PYTHON=$(UV_CACHE_DIR="$ROOT/.cache/uv" \
+            UV_PYTHON_INSTALL_DIR="$STATE/python" \
+            "$UV" python find "$PYTHON_VERSION" --managed-python --no-project)
+        [ -x "$MANAGED_PYTHON" ] || fail "uv did not provide the pinned managed Python $PYTHON_VERSION"
+        cd "$ROOT"
+        exec "$MANAGED_PYTHON" -m tools.local_execution bootstrap \
+            --uv "$UV" --managed-python "$MANAGED_PYTHON" "$@"
+        ;;
+    doctor)
+        if [ ! -x "$ROOT/.venv/bin/python" ]; then
+            printf '%s\n' \
+                "profile=$PROFILE_ID PASS" \
+                "uv=$UV_VERSION PASS host-provided" \
+                "host_prerequisites=PASS declared trust root available" \
+                "python_required=$PYTHON_VERSION" \
+                "project_environment=MISSING REQUIRED" \
+                "doctor=FAIL" \
+                "next=./flare bootstrap"
+            exit 1
+        fi
+        cd "$ROOT"
+        exec "$ROOT/.venv/bin/python" -m tools.local_execution doctor --uv "$UV" "$@"
+        ;;
+    *)
+        [ -x "$ROOT/.venv/bin/python" ] || fail "project environment is missing; run ./flare bootstrap"
+        cd "$ROOT"
+        exec "$ROOT/.venv/bin/python" -m tools.local_execution "$COMMAND" --uv "$UV" "$@"
+        ;;
+esac

@@ -1,0 +1,60 @@
+[dispatch]
+max_bundle_mib = 300
+artifact_dir = ".flare/artifacts"
+governance_dir = "docs/engineering/governance/rc2"
+
+[principals.product_owner]
+display = "Product Owner / Main Coordinator"
+status = "current"
+
+[roles.backend]
+display = "kolyan_backend"
+timing = "ACT_NOW"
+task = "tasks/backend.md"
+dependency_profile = "backend"
+
+[roles.frontend]
+display = "kolyan_frontend"
+timing = "ACT_NOW"
+task = "tasks/frontend.md"
+dependency_profile = "frontend"
+
+[roles.qa1]
+display = "kolyan_qa"
+timing = "ACT_NOW"
+task = "tasks/qa1.md"
+dependency_profile = "qa1"
+
+[roles.qa2]
+display = "kolyan_qa_2"
+timing = "ACT_NOW"
+task = "tasks/qa2.md"
+dependency_profile = "qa2"
+
+[roles.platform]
+display = "kolyan_platform"
+timing = "ACT_NOW"
+task = "tasks/platform.md"
+dependency_profile = "platform"
+
+[roles.linter]
+display = "kolyan_linter_reviewer"
+timing = "ACT_NOW"
+task = "tasks/linter.md"
+dependency_profile = "linter"
+
+[roles.analyst]
+display = "kolyan_analyst"
+timing = "ACT_NOW"
+task = "tasks/analyst.md"
+
+[roles.product_owner]
+display = "product_owner"
+timing = "HOLD"
+task = "tasks/product_owner.md"
+principal_refs = ["product_owner"]
+
+[roles.gatekeeper]
+display = "kolyan_gatekeeper"
+timing = "HOLD"
+task = "tasks/gatekeeper.md"

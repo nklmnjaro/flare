@@ -1,9 +1,13 @@
+# flare-bootstrap-managed: v1
 from __future__ import annotations
 
 import argparse
 import os
 import re
+import shutil
+import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,46 +25,126 @@ REQUIRED = (
 
 CONVENTIONAL_PR = re.compile(
     r"^(feat|fix|docs|style|refactor|test|chore|ci|build|perf|revert)"
-    r"(\([a-z0-9-]+\))?: .{1,}$"
+    r"(\([a-z0-9-]+\))?: .+$"
 )
 
-FORBIDDEN_TRACKED = {
+FORBIDDEN_NAMES = {
     ".env",
     "credentials.json",
     "id_rsa",
 }
 
+WORKSPACE_DIRS = frozenset({".flare", ".git", ".venv", "node_modules"})
 
-def check() -> list[str]:
+
+def _required_file_errors(root: Path) -> list[str]:
+    return [
+        f"missing required repository file: {rel}"
+        for rel in REQUIRED
+        if not (root / rel).is_file()
+    ]
+
+
+def _git_index_files(root: Path) -> tuple[list[Path] | None, list[str]]:
+    """Return tracked repository paths, or None for a source tree without Git metadata."""
+    if not (root / ".git").exists():
+        return None, []
+
+    git = shutil.which("git")
+    if git is None:
+        return [], ["Git is required to inspect tracked repository files"]
+
+    result = subprocess.run(
+        [git, "-C", str(root), "ls-files", "--cached", "-z"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if result.returncode != 0:
+        return [], ["unable to read Git index"]
+
+    paths = [
+        Path(os.fsdecode(raw_path))
+        for raw_path in result.stdout.split(b"\0")
+        if raw_path
+    ]
+    return paths, []
+
+
+def _source_tree_files(root: Path) -> list[Path]:
+    """Return source-like files when Git metadata is intentionally absent."""
+    files: list[Path] = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root)
+        if any(part in WORKSPACE_DIRS for part in rel.parts):
+            continue
+        files.append(rel)
+    return sorted(files, key=lambda item: item.as_posix())
+
+
+def _repository_files(root: Path) -> tuple[list[Path], list[str]]:
+    tracked, errors = _git_index_files(root)
+    if errors:
+        return [], errors
+    if tracked is not None:
+        return tracked, []
+    return _source_tree_files(root), []
+
+
+def _pr_title_errors(env: Mapping[str, str]) -> list[str]:
+    title = env.get("PR_TITLE", "").strip()
+    if not title:
+        return []
+
     errors: list[str] = []
-
-    for rel in REQUIRED:
-        if not (ROOT / rel).exists():
-            errors.append(f"missing required repository file: {rel}")
-
-    title = os.environ.get("PR_TITLE", "").strip()
-    if title and not CONVENTIONAL_PR.fullmatch(title):
+    if len(title) > 72:
+        errors.append("PR title must be <= 72 characters")
+    if not CONVENTIONAL_PR.fullmatch(title):
         errors.append(
             "PR title must use Conventional Commits style, e.g. "
             "'feat(ingest): accept event batch'"
         )
-    if len(title) > 72:
-        errors.append("PR title must be <= 72 characters")
+    return errors
 
-    for path in ROOT.rglob("*"):
-        if not path.is_file():
-            continue
-        if any(part in {".git", ".venv", "node_modules"} for part in path.parts):
-            continue
-        if path.name in FORBIDDEN_TRACKED:
-            errors.append(f"forbidden tracked-looking file: {path.relative_to(ROOT)}")
+
+def check(
+    root: Path = ROOT,
+    env: Mapping[str, str] | None = None,
+) -> list[str]:
+    errors = _required_file_errors(root)
+    errors.extend(_pr_title_errors(os.environ if env is None else env))
+
+    repository_files, repository_errors = _repository_files(root)
+    errors.extend(repository_errors)
+    for rel in repository_files:
+        if rel.name in FORBIDDEN_NAMES:
+            errors.append(f"forbidden tracked/source file: {rel.as_posix()}")
 
     return errors
 
 
-def doctor() -> int:
-    print(f"repo_root={ROOT}")
+def doctor(root: Path = ROOT) -> int:
+    errors = _required_file_errors(root)
+    tracked, git_errors = _git_index_files(root)
+    errors.extend(git_errors)
+
+    print("repo_root=.")
     print(f"python={sys.version.split()[0]}")
+    if tracked is None:
+        print("git_index=NOT_APPLICABLE")
+    elif git_errors:
+        print("git_index=FAIL")
+    else:
+        print("git_index=PASS")
+
+    if errors:
+        print("doctor=FAIL")
+        for error in errors:
+            print(f"- {error}")
+        return 1
+
     print("doctor=PASS")
     return 0
 

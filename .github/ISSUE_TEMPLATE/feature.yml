@@ -1,3 +1,4 @@
+# flare-bootstrap-managed: v1
 name: Product change
 description: Problem-first feature proposal
 title: "feat: "
@@ -7,7 +8,7 @@ body:
     id: problem
     attributes:
       label: User problem
-      description: Do not start with the proposed implementation.
+      description: Start with the problem, not the implementation.
     validations:
       required: true
   - type: textarea
@@ -23,7 +24,7 @@ body:
     validations:
       required: true
   - type: textarea
-    id: nong
+    id: non_goals
     attributes:
       label: Non-goals
   - type: textarea
