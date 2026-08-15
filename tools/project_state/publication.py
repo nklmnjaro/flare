@@ -1,6 +1,7 @@
 import hashlib
 import tempfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from tools.project_state.git import run_git
@@ -151,6 +152,93 @@ def _publication_result(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _PinnedPublication:
+    repo: Path
+    ref: str
+    expected_parent: ResolvedCommit
+    expected_state_sha256: str
+    candidate: ResolvedCommit
+    before_cas: Callable[[], None] | None
+
+    def result(
+        self,
+        status: PublicationStatus,
+        candidate_state_sha256: str | None = None,
+        findings: frozenset[Finding] = frozenset(),
+    ) -> PublicationResult:
+        return _publication_result(
+            status,
+            self.expected_parent.oid,
+            self.expected_state_sha256,
+            self.candidate.oid,
+            candidate_state_sha256,
+            findings,
+        )
+
+
+def _validated_candidate_state(
+    publication: _PinnedPublication,
+) -> str | PublicationResult:
+    if not publication.ref.startswith("refs/"):
+        return publication.result(PublicationStatus.INVALID_CANDIDATE)
+    parent_line = _git_output(
+        publication.repo,
+        "rev-list",
+        "--parents",
+        "-n",
+        "1",
+        publication.candidate.oid,
+    ).split()
+    if len(parent_line) != 2 or parent_line[1] != publication.expected_parent.oid:
+        return publication.result(PublicationStatus.INVALID_CANDIDATE)
+    tree = GitTree(publication.repo, publication.candidate)
+    validation = validate_candidate(tree).result
+    state = tree.read(STATE_PATH)
+    if state is None:
+        return publication.result(PublicationStatus.INVALID_CANDIDATE)
+    candidate_sha = _sha256_bytes(state)
+    if validation.status is not ValidationStatus.PASS:
+        return publication.result(
+            PublicationStatus.STATE_DEFECT,
+            candidate_sha,
+            validation.findings,
+        )
+    return candidate_sha
+
+
+def _preimage_is_current(publication: _PinnedPublication) -> bool:
+    current = run_git(publication.repo, "rev-parse", "--verify", publication.ref)
+    current_oid = (
+        current.stdout.decode("ascii").strip() if current.returncode == 0 else ""
+    )
+    source_state = GitTree(publication.repo, publication.expected_parent).read(
+        STATE_PATH
+    )
+    return (
+        current_oid == publication.expected_parent.oid
+        and source_state is not None
+        and _sha256_bytes(source_state) == publication.expected_state_sha256
+    )
+
+
+def _update_ref_status(publication: _PinnedPublication) -> PublicationStatus:
+    update = run_git(
+        publication.repo,
+        "update-ref",
+        publication.ref,
+        publication.candidate.oid,
+        publication.expected_parent.oid,
+    )
+    if update.returncode == 0:
+        return PublicationStatus.PASS
+    after = run_git(publication.repo, "rev-parse", "--verify", publication.ref)
+    after_oid = after.stdout.decode("ascii").strip() if after.returncode == 0 else ""
+    if after_oid != publication.expected_parent.oid:
+        return PublicationStatus.STALE_PREIMAGE
+    return PublicationStatus.INVALID_CANDIDATE
+
+
 def _publish_pinned_candidate(
     repo: Path,
     ref: str,
@@ -159,88 +247,22 @@ def _publish_pinned_candidate(
     candidate: ResolvedCommit,
     before_cas: Callable[[], None] | None,
 ) -> PublicationResult:
-    invalid = _publication_result(
-        PublicationStatus.INVALID_CANDIDATE,
-        expected_parent.oid,
-        expected_state_sha256,
-        candidate.oid,
-    )
-    if not ref.startswith("refs/"):
-        return invalid
-
-    parent_line = _git_output(
+    publication = _PinnedPublication(
         repo,
-        "rev-list",
-        "--parents",
-        "-n",
-        "1",
-        candidate.oid,
-    ).split()
-    if len(parent_line) != 2 or parent_line[1] != expected_parent.oid:
-        return invalid
-
-    tree = GitTree(repo, candidate)
-    validation = validate_candidate(tree).result
-    state = tree.read(STATE_PATH)
-    if state is None:
-        return invalid
-    candidate_sha = _sha256_bytes(state)
-    if validation.status is not ValidationStatus.PASS:
-        return _publication_result(
-            PublicationStatus.STATE_DEFECT,
-            expected_parent.oid,
-            expected_state_sha256,
-            candidate.oid,
-            candidate_sha,
-            validation.findings,
-        )
-
-    current = run_git(repo, "rev-parse", "--verify", ref)
-    current_oid = (
-        current.stdout.decode("ascii").strip() if current.returncode == 0 else ""
-    )
-    source_state = GitTree(repo, expected_parent).read(STATE_PATH)
-    if (
-        current_oid != expected_parent.oid
-        or source_state is None
-        or _sha256_bytes(source_state) != expected_state_sha256
-    ):
-        return _publication_result(
-            PublicationStatus.STALE_PREIMAGE,
-            expected_parent.oid,
-            expected_state_sha256,
-            candidate.oid,
-            candidate_sha,
-        )
-
-    if before_cas is not None:
-        before_cas()
-    update = run_git(
-        repo,
-        "update-ref",
         ref,
-        candidate.oid,
-        expected_parent.oid,
-    )
-    if update.returncode == 0:
-        status = PublicationStatus.PASS
-    else:
-        after = run_git(repo, "rev-parse", "--verify", ref)
-        after_oid = (
-            after.stdout.decode("ascii").strip() if after.returncode == 0 else ""
-        )
-        status = (
-            PublicationStatus.STALE_PREIMAGE
-            if after_oid != expected_parent.oid
-            else PublicationStatus.INVALID_CANDIDATE
-        )
-    return _publication_result(
-        status,
-        expected_parent.oid,
+        expected_parent,
         expected_state_sha256,
-        candidate.oid,
-        candidate_sha,
+        candidate,
+        before_cas,
     )
+    candidate_state = _validated_candidate_state(publication)
+    if isinstance(candidate_state, PublicationResult):
+        return candidate_state
+    if not _preimage_is_current(publication):
+        return publication.result(PublicationStatus.STALE_PREIMAGE, candidate_state)
+    if publication.before_cas is not None:
+        publication.before_cas()
+    return publication.result(_update_ref_status(publication), candidate_state)
 
 
 def publish_candidate(

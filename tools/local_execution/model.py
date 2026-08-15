@@ -14,6 +14,7 @@ class Capability(StrEnum):
     CHECK_FAST = "check-fast"
     CHECK = "check"
     VERIFY = "verify"
+    QUALITY_ADVISORY = "quality-advisory"
     DIAGNOSE = "diagnose"
     STATE_CHECK = "state-check"
     STATE_STATIC = "state-static"
@@ -29,6 +30,7 @@ PUBLIC_CAPABILITIES = (
     Capability.CHECK_FAST,
     Capability.CHECK,
     Capability.VERIFY,
+    Capability.QUALITY_ADVISORY,
     Capability.DIAGNOSE,
 )
 

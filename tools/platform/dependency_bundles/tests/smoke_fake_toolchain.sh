@@ -1,6 +1,8 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 set -Eeuo pipefail
 IFS=$'\n\t'
+PATH=/usr/bin:/bin
+export PATH
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -x "$SCRIPT_DIR/../flare-bundle.sh" ]]; then
@@ -75,7 +77,8 @@ for spec in \
   'ruff:ruff 0.16.1' \
   'mypy:mypy 2.3.0 (compiled: yes)' \
   'pylint:pylint 4.0.6' \
-  'pre-commit:pre-commit 4.0.0'; do
+  'pre-commit:pre-commit 4.6.0' \
+  'gitlint:gitlint, version 0.19.1'; do
   name="${spec%%:*}"
   out="${spec#*:}"
   cat > "$UV_PROJECT_ENVIRONMENT/bin/$name" <<EOF
@@ -170,6 +173,14 @@ hadolint	2.fake	fake	-	cli
 actionlint	v1.fake	fake	-	cli
 kubeconform	0.fake	fake	-	cli
 EOF
+
+echo "[synthetic] intentional RED: unsafe build id"
+if FLARE_BUNDLE_BUILD_ID='../escape' \
+  "$HERE/flare-bundle.sh" --repo "$REPO" --profile linter --out "$OUT" \
+  >/dev/null 2>&1; then
+  echo "[synthetic][ERROR] unsafe build id unexpectedly accepted" >&2
+  exit 1
+fi
 
 for profile in backend frontend qa1 qa2 platform linter; do
   echo "[synthetic] $profile"

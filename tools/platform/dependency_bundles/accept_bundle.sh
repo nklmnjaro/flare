@@ -1,11 +1,14 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 set -Eeuo pipefail
 IFS=$'\n\t'
+PATH=/usr/bin:/bin
+export PATH
 
 PROFILE="${1:-linter}"
 REPO="${2:-$HOME/Projects/Flare/flare}"
 OUT="${3:-$HOME/Projects/Flare/dependency-dist}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUNDLE_PYTHON="${FLARE_BUNDLE_PYTHON:-}"
 
 case "$PROFILE" in
   backend|frontend|qa1|qa2|platform|linter) ;;
@@ -13,6 +16,14 @@ case "$PROFILE" in
 esac
 
 mkdir -p "$OUT"
+[[ -n "$BUNDLE_PYTHON" ]] || {
+  echo "[accept][ERROR] set FLARE_BUNDLE_PYTHON to an explicitly trusted interpreter" >&2
+  exit 1
+}
+[[ -x "$BUNDLE_PYTHON" ]] || {
+  echo "[accept][ERROR] pinned bundle verifier Python is missing" >&2
+  exit 1
+}
 BUILD_ID="accept-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 export FLARE_BUNDLE_BUILD_ID="$BUILD_ID"
 
@@ -29,7 +40,6 @@ ARCHIVE="$(find "$OUT" -maxdepth 1 -type f \
   exit 1
 }
 
-python3 -S "$HERE/verify_bundle.py" "$ARCHIVE"
 (
   cd "$OUT"
   sha256sum -c "$(basename "$ARCHIVE").sha256"
@@ -37,12 +47,15 @@ python3 -S "$HERE/verify_bundle.py" "$ARCHIVE"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-TARGET="$TMP/flare"
+TARGET="$TMP/flare-\$(touch activation-injection)"
 mkdir -p "$TARGET/.venv"
 printf 'do-not-touch\n' > "$TARGET/.venv/flare-unmanaged-sentinel"
 UNMANAGED_VENV_BEFORE="$(sha256sum "$TARGET/.venv/flare-unmanaged-sentinel")"
-tar -xzf "$ARCHIVE" -C "$TMP"
-BUNDLE_ROOT="$(find "$TMP" -mindepth 1 -maxdepth 1 -type d \
+INSPECTION_ROOT="$TMP/verified-bundle"
+mkdir -p "$INSPECTION_ROOT"
+"$BUNDLE_PYTHON" -I -B -S "$HERE/verify_bundle.py" \
+  --extract-to "$INSPECTION_ROOT" "$ARCHIVE"
+BUNDLE_ROOT="$(find "$INSPECTION_ROOT" -mindepth 1 -maxdepth 1 -type d \
   -name "flare-dependencies-${PROFILE}-*" -print -quit)"
 [[ -n "$BUNDLE_ROOT" ]] || {
   echo "[accept][ERROR] extracted bundle root not found" >&2
@@ -55,7 +68,8 @@ ACTIVATE="$TARGET/.flare/profiles/$PROFILE/current/activate.sh"
 CURRENT="$TARGET/.flare/profiles/$PROFILE/current"
 
 echo "[accept] clean restore #1"
-"${RESTORE_ENV[@]}" "$BUNDLE_ROOT/restore.sh" "$TARGET"
+"${RESTORE_ENV[@]}" FLARE_BUNDLE_PYTHON="$BUNDLE_PYTHON" \
+  "$HERE/restore_role_bundle.sh" "$ARCHIVE" "$TARGET"
 [[ -L "$CURRENT" ]] || {
   echo "[accept][ERROR] current pointer missing after restore" >&2
   exit 1
@@ -63,11 +77,44 @@ echo "[accept] clean restore #1"
 CURRENT_BEFORE="$(readlink "$CURRENT")"
 
 echo "[accept] idempotent restore #2"
-"${RESTORE_ENV[@]}" "$BUNDLE_ROOT/restore.sh" "$TARGET"
+"${RESTORE_ENV[@]}" FLARE_BUNDLE_PYTHON="$BUNDLE_PYTHON" \
+  "$HERE/restore_role_bundle.sh" "$ARCHIVE" "$TARGET"
 [[ "$(readlink "$CURRENT")" == "$CURRENT_BEFORE" ]] || {
   echo "[accept][ERROR] idempotent restore changed bundle id" >&2
   exit 1
 }
+if [[ "$PROFILE" == "linter" ]]; then
+  echo "[accept] intentional RED: wrapper rejects unlisted payload"
+  UNLISTED_PARENT="$TMP/unlisted-wrapper"
+  UNLISTED_ROOT="$UNLISTED_PARENT/$(basename "$BUNDLE_ROOT")"
+  UNLISTED_ARCHIVE="$TMP/wrapper-unlisted.tar.gz"
+  mkdir -p "$UNLISTED_PARENT"
+  cp -a "$BUNDLE_ROOT" "$UNLISTED_ROOT"
+  printf 'not listed\n' > "$UNLISTED_ROOT/payload/unlisted.txt"
+  tar --sort=name --owner=0 --group=0 --numeric-owner \
+    --mtime='UTC 2020-01-01' -czf "$UNLISTED_ARCHIVE" \
+    -C "$UNLISTED_PARENT" "$(basename "$UNLISTED_ROOT")"
+  (
+    cd "$TMP"
+    sha256sum "$(basename "$UNLISTED_ARCHIVE")" \
+      > "$(basename "$UNLISTED_ARCHIVE").sha256"
+  )
+  UNLISTED_LOG="$TMP/wrapper-unlisted.log"
+  if "${RESTORE_ENV[@]}" FLARE_BUNDLE_PYTHON="$BUNDLE_PYTHON" \
+    "$HERE/restore_role_bundle.sh" "$UNLISTED_ARCHIVE" "$TARGET" \
+    >"$UNLISTED_LOG" 2>&1; then
+    echo "[accept][ERROR] wrapper accepted unlisted payload" >&2
+    exit 1
+  fi
+  grep -F "unlisted regular payload file" "$UNLISTED_LOG" >/dev/null || {
+    echo "[accept][ERROR] wrapper rejection lacked bounded diagnostic" >&2
+    exit 1
+  }
+  [[ "$(readlink "$CURRENT")" == "$CURRENT_BEFORE" ]] || {
+    echo "[accept][ERROR] wrapper rejection changed current" >&2
+    exit 1
+  }
+fi
 UNMANAGED_VENV_AFTER="$(sha256sum "$TARGET/.venv/flare-unmanaged-sentinel")"
 [[ "$UNMANAGED_VENV_AFTER" == "$UNMANAGED_VENV_BEFORE" ]] || {
   echo "[accept][ERROR] restore mutated unmanaged project .venv" >&2
@@ -75,8 +122,10 @@ UNMANAGED_VENV_AFTER="$(sha256sum "$TARGET/.venv/flare-unmanaged-sentinel")"
 }
 
 echo "[accept] isolated activation smoke"
-PROFILE="$PROFILE" ACTIVATE="$ACTIVATE" bash --noprofile --norc -c '
+PROFILE="$PROFILE" ACTIVATE="$ACTIVATE" ACCEPT_TMP="$TMP" \
+  bash --noprofile --norc -c '
   set -e
+  cd "$ACCEPT_TMP"
   before="$-"
   trap ":" USR1
   before_trap="$(trap -p USR1)"
@@ -104,6 +153,7 @@ PROFILE="$PROFILE" ACTIVATE="$ACTIVATE" bash --noprofile --norc -c '
     linter)
       pylint --version
       pre-commit --version
+      gitlint --version
       hadolint --version
       actionlint --version
       kubeconform -v
@@ -137,6 +187,10 @@ PROFILE="$PROFILE" ACTIVATE="$ACTIVATE" bash --noprofile --norc -c '
       ;;
   esac
 '
+[[ ! -e "$TMP/activation-injection" ]] || {
+  echo "[accept][ERROR] activation evaluated repository path syntax" >&2
+  exit 1
+}
 
 echo "[accept] intentional RED: activation must reject missing supported tool"
 ACTIVE_STATE="$(readlink -f "$CURRENT")"
@@ -169,7 +223,7 @@ awk -F '\t' 'BEGIN {OFS="\t"}
 mv "$WRONG_VERSION_ROOT/profile-toolchain.tsv.tmp" "$WRONG_VERSION_ROOT/profile-toolchain.tsv"
 (
   cd "$WRONG_VERSION_ROOT"
-  find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+  find . -type f ! -path ./SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
 )
 if "${RESTORE_ENV[@]}" "$WRONG_VERSION_ROOT/restore.sh" "$TARGET" >/dev/null 2>&1; then
   echo "[accept][ERROR] wrong supported-tool version unexpectedly restored" >&2
@@ -189,7 +243,7 @@ sed -i "s/^BUNDLE_ID=.*/BUNDLE_ID=$BROKEN_ID/" "$BROKEN_ROOT/profile.env"
 printf 'command\tpython\tPython 0.0.0-intentional-red\n' >> "$BROKEN_ROOT/postconditions.tsv"
 (
   cd "$BROKEN_ROOT"
-  find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+  find . -type f ! -path ./SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
 )
 if "${RESTORE_ENV[@]}" "$BROKEN_ROOT/restore.sh" "$TARGET" >/dev/null 2>&1; then
   echo "[accept][ERROR] intentional broken candidate unexpectedly restored" >&2
@@ -225,7 +279,7 @@ case "$PROFILE" in
 esac
 (
   cd "$MISSING_ROOT"
-  find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+  find . -type f ! -path ./SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
 )
 if "${RESTORE_ENV[@]}" "$MISSING_ROOT/restore.sh" "$TARGET" >/dev/null 2>&1; then
   echo "[accept][ERROR] bundle missing a supported tool unexpectedly restored" >&2
@@ -272,7 +326,7 @@ cp -a "$BUNDLE_ROOT" "$UNSAFE"
 ln -s ../../../../outside "$UNSAFE/payload/bin/flare-unsafe-link"
 (
   cd "$UNSAFE"
-  find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+  find . -type f ! -path ./SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
 )
 UNSAFE_TARGET="$TMP/unsafe-target"
 mkdir -p "$UNSAFE_TARGET"

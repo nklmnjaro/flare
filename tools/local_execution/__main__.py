@@ -73,7 +73,8 @@ def main(arguments: list[str] | None = None) -> int:
             return 2
         return bootstrap_command(ROOT, profile, uv_path, Path(managed_value))
     if capability is Capability.ENVIRONMENT_MANIFEST:
-        manifest = observe_environment(ROOT, profile, Path(sys.executable), uv_path)
+        environment = profile.path(ROOT, profile.project_environment)
+        manifest = observe_environment(ROOT, profile, environment, uv_path)
         sys.stdout.buffer.write(manifest.encoded())
         return 0
     return dispatch(capability, CommandContext(ROOT, profile, uv_path))

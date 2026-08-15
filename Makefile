@@ -1,6 +1,7 @@
 # flare-bootstrap-managed: v1
 
-.PHONY: doctor bootstrap check-fast check verify diagnose state-check state-static state-test state-allure state-allure-open
+.PHONY: doctor bootstrap check-fast check verify diagnose quality-advisory \
+	state-check state-static state-test state-allure state-allure-open
 
 doctor:
 	@./flare doctor
@@ -35,18 +36,5 @@ verify:
 diagnose:
 	@./flare diagnose
 
-# Repository-owned Flare engineering dispatch facade.
-dispatch-doctor:
-	python3 tools/platform/team_dispatch/build.py doctor --repo .
-
-deps-build:
-	python3 tools/platform/team_dispatch/build.py deps --repo .
-
-dispatch-build:
-	python3 tools/platform/team_dispatch/build.py dispatch --repo .
-
-dispatch-verify:
-	python3 tools/platform/team_dispatch/build.py verify --repo .
-
-foundation-package:
-	python3 tools/platform/team_dispatch/build.py all --repo .
+quality-advisory:
+	@./flare quality-advisory

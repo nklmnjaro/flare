@@ -1,14 +1,33 @@
 import os
 import subprocess
+import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from tools.local_execution.clean_room_source_supervisor import (
+    DESCENDANT_EXIT,
+    MAX_PROCESS_OUTPUT_BYTES,
+    OUTPUT_LIMIT_EXIT,
+    SHUTDOWN_EXIT,
+    TIMEOUT_EXIT,
+)
 from tools.local_execution.model import ProcessResult
 from tools.local_execution.profile import HostProfile
+from tools.local_execution.supervisor_client import (
+    communicate_supervisor,
+    shutdown_supervisor,
+)
 
 MAX_DIAGNOSTIC_BYTES = 12_000
+DEFAULT_TIMEOUT_SECONDS = 900
+SUPERVISOR_GRACE_SECONDS = 15
+SUPERVISOR = Path(__file__).with_name("clean_room_source_supervisor.py")
+_OUTPUT_LIMIT_RETURN_CODE = 125
+_DESCENDANT_RETURN_CODE = 126
+_INVOCATION_RETURN_CODE = 127
+_TIMEOUT_RETURN_CODE = 124
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +35,11 @@ class ProcessSpec:
     label: str
     argv: tuple[str, ...]
     environment: tuple[tuple[str, str], ...] = ()
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
+
+    def __post_init__(self) -> None:
+        if self.timeout_seconds < 1:
+            raise ValueError("process timeout must be a positive number of seconds")
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,16 +52,60 @@ class CommandContext:
 type ProcessRunner = Callable[[ProcessSpec, Path], ProcessResult]
 
 
-def _bound(value: str) -> str:
-    encoded = value.encode("utf-8")
+def _bound(encoded: bytes) -> str:
     if len(encoded) <= MAX_DIAGNOSTIC_BYTES:
-        return value
+        return encoded.decode("utf-8", "replace")
     half = (MAX_DIAGNOSTIC_BYTES - 80) // 2
     omitted = len(encoded) - (half * 2)
     return (
         encoded[:half].decode("utf-8", "replace")
         + f"\n... [TRUNCATED {omitted} BYTES] ...\n"
         + encoded[-half:].decode("utf-8", "replace")
+    )
+
+
+def _diagnostic(stderr: bytes, message: str) -> bytes:
+    separator = b"" if not stderr or stderr.endswith(b"\n") else b"\n"
+    return stderr + separator + message.encode("utf-8") + b"\n"
+
+
+def _normalized_execution(
+    returncode: int,
+    stdout: bytes,
+    stderr: bytes,
+    timeout: int,
+) -> tuple[int, bytes, bytes]:
+    if returncode == OUTPUT_LIMIT_EXIT:
+        message = (
+            f"command exceeded its combined {MAX_PROCESS_OUTPUT_BYTES}-byte "
+            "output bound"
+        )
+        return _OUTPUT_LIMIT_RETURN_CODE, stdout, _diagnostic(stderr, message)
+    if returncode == DESCENDANT_EXIT:
+        message = "command left a descendant process tree"
+        return _DESCENDANT_RETURN_CODE, stdout, _diagnostic(stderr, message)
+    if returncode in {TIMEOUT_EXIT, SHUTDOWN_EXIT}:
+        message = f"command exceeded its explicit {timeout}-second local bound"
+        return _TIMEOUT_RETURN_CODE, stdout, _diagnostic(stderr, message)
+    if returncode >= OUTPUT_LIMIT_EXIT:
+        message = "command invocation failed inside the process supervisor"
+        return _INVOCATION_RETURN_CODE, stdout, _diagnostic(stderr, message)
+    return returncode, stdout, stderr
+
+
+def _result(
+    specification: ProcessSpec,
+    returncode: int,
+    stdout: bytes,
+    stderr: bytes,
+    started: float,
+) -> ProcessResult:
+    return ProcessResult(
+        specification.label,
+        returncode,
+        _bound(stdout),
+        _bound(stderr),
+        time.monotonic() - started,
     )
 
 
@@ -53,40 +121,72 @@ def run_process(specification: ProcessSpec, root: Path) -> ProcessResult:
         environment.pop(name, None)
     environment["PATH"] = "/usr/bin:/bin"
     environment.update(dict(specification.environment))
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment["PYTHONNOUSERSITE"] = "1"
     started = time.monotonic()
+    supervised = (
+        sys.executable,
+        "-I",
+        "-B",
+        str(SUPERVISOR),
+        str(specification.timeout_seconds),
+        "--",
+        *specification.argv,
+    )
     try:
-        completed = subprocess.run(
-            specification.argv,
+        process = subprocess.Popen(
+            supervised,
             cwd=root,
             env=environment,
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=900,
-        )
-        return ProcessResult(
-            specification.label,
-            completed.returncode,
-            _bound(completed.stdout),
-            _bound(completed.stderr),
-            time.monotonic() - started,
-        )
-    except subprocess.TimeoutExpired:
-        return ProcessResult(
-            specification.label,
-            124,
-            "",
-            "command exceeded its explicit 900-second local bound",
-            time.monotonic() - started,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
         )
     except OSError as error:
-        return ProcessResult(
-            specification.label,
-            127,
-            "",
-            f"command invocation failed: {type(error).__name__}",
-            time.monotonic() - started,
+        message = f"command invocation failed: {type(error).__name__}"
+        return _result(
+            specification,
+            _INVOCATION_RETURN_CODE,
+            b"",
+            message.encode("utf-8"),
+            started,
         )
+    try:
+        stdout, stderr = communicate_supervisor(
+            process,
+            specification.timeout_seconds + SUPERVISOR_GRACE_SECONDS,
+        )
+    except BaseException as error:
+        try:
+            stdout, stderr = shutdown_supervisor(process)
+        except BaseException as cleanup_error:
+            message = f"supervisor cleanup failed: {cleanup_error}"
+            if isinstance(error, subprocess.TimeoutExpired):
+                return _result(
+                    specification,
+                    _INVOCATION_RETURN_CODE,
+                    b"",
+                    message.encode("utf-8"),
+                    started,
+                )
+            raise RuntimeError(message) from cleanup_error
+        if isinstance(error, subprocess.TimeoutExpired):
+            message = "process supervisor exceeded its outer cleanup bound"
+            return _result(
+                specification,
+                _TIMEOUT_RETURN_CODE,
+                stdout,
+                _diagnostic(stderr, message),
+                started,
+            )
+        raise
+    returncode, stdout, stderr = _normalized_execution(
+        process.returncode,
+        stdout,
+        stderr,
+        specification.timeout_seconds,
+    )
+    return _result(specification, returncode, stdout, stderr, started)
 
 
 def _render_result(result: ProcessResult) -> None:

@@ -50,6 +50,18 @@ bundle integrity + link safety
 The restore never mutates the project `.venv`. Python profile environments live
 inside the versioned profile state.
 
+Bundle build, accept, and restore entrypoints intentionally have no implicit
+`.venv/bin/python` fallback. After an admitted bootstrap, select the admitted
+interpreter explicitly for the whole bundle operation:
+
+```bash
+export FLARE_BUNDLE_PYTHON="$PWD/.venv""/bin/python"
+tools/platform/dependency_bundles/build_all_role_bundles.sh "$PWD" OUTPUT_DIR
+```
+
+The caller remains responsible for entering through `./flare bootstrap` first;
+the bundle adapters reject a missing `FLARE_BUNDLE_PYTHON` before execution.
+
 `profile-toolchain.tsv` is the supported direct tool surface. Every entry must
 have a real source manifest record (except `gofmt`, which is derived from the
 declared Go runtime) and a version that the restored candidate can prove.
@@ -70,5 +82,6 @@ cases for:
 The synthetic suite also preserves a minimal pre-fix ordering fixture so the
 original atomicity defect remains reproducible as intentional RED evidence.
 
-`restore_role_bundle.sh` runs the canonical archive verifier before extraction;
-consumer restore must not bypass archive safety validation.
+`restore_role_bundle.sh` delegates verification and extraction to the canonical
+verifier, then executes only the immutable snapshot that passed validation.
+Consumer restore must not reopen the supplied archive path after verification.

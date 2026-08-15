@@ -18,6 +18,18 @@ def _repo_policy() -> ProcessSpec:
     return _python_spec("repo-policy", "tools/quality/check_repo_policy.py")
 
 
+def _source_policy() -> ProcessSpec:
+    return _python_spec("source-policy", "-m", "tools.quality.source_policy")
+
+
+def _test_architecture_policy() -> ProcessSpec:
+    return _python_spec(
+        "test-architecture-policy",
+        "-m",
+        "tools.quality.test_architecture_policy",
+    )
+
+
 def _architecture() -> ProcessSpec:
     return _python_spec(
         "execution-architecture", "-m", "tools.local_execution.architecture"
@@ -40,7 +52,7 @@ def _state_check() -> ProcessSpec:
 def _uv_lock(context: CommandContext) -> ProcessSpec:
     return ProcessSpec(
         "uv-lock",
-        (str(context.uv), "lock", "--check"),
+        (str(context.uv), "--no-config", "lock", "--check"),
         (
             (
                 "UV_CACHE_DIR",
@@ -57,11 +69,7 @@ def _ruff_format() -> ProcessSpec:
         "ruff",
         "format",
         "--check",
-        "tools/project_state",
-        "tools/local_execution",
-        "tools/quality/source_manifest.py",
-        "tools/quality/tests",
-        "typings",
+        ".",
     )
 
 
@@ -71,23 +79,55 @@ def _ruff_check() -> ProcessSpec:
         "-m",
         "ruff",
         "check",
-        "tools/project_state",
-        "tools/local_execution",
-        "tools/quality/source_manifest.py",
-        "tools/quality/tests",
-        "typings",
+        "--config",
+        "tools/quality/ruff-lint.toml",
+        ".",
     )
 
 
 def _mypy() -> ProcessSpec:
-    return _python_spec(
+    return ProcessSpec(
         "mypy-strict",
+        (
+            sys.executable,
+            "-I",
+            "-B",
+            "-m",
+            "mypy",
+            "--config-file=/dev/null",
+            "--strict",
+            "--python-version=3.14",
+            "--explicit-package-bases",
+            "tools",
+            "typings",
+        ),
+        (("MYPYPATH", "typings"),),
+    )
+
+
+def _bundle_tests() -> ProcessSpec:
+    return _python_spec(
+        "dependency-bundle-tests",
         "-m",
-        "mypy",
-        "tools/project_state",
-        "tools/local_execution",
-        "tools/quality/source_manifest.py",
-        "tools/quality/tests",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "tools/quality/tests/quality_hardening/test_dependency_bundle_integrity.py",
+    )
+
+
+def _bundle_smoke() -> ProcessSpec:
+    return ProcessSpec(
+        "dependency-bundle-shell-smoke",
+        (
+            "/usr/bin/bash",
+            "tools/platform/dependency_bundles/tests/smoke_fake_toolchain.sh",
+        ),
+        (
+            ("FLARE_BUNDLE_PYTHON", sys.executable),
+            ("PATH", "/usr/bin:/bin"),
+        ),
     )
 
 
@@ -104,6 +144,35 @@ def _quality_tests() -> ProcessSpec:
         "--dist",
         "worksteal",
         "tools/quality/tests",
+    )
+
+
+def _quality_allure(context: CommandContext) -> ProcessSpec:
+    results = context.root / ".tmp/quality-hardening-allure-results"
+    return ProcessSpec(
+        "quality-hardening-evidence",
+        (
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "--alluredir",
+            str(results),
+            "--clean-alluredir",
+            "--allure-no-capture",
+            "tools/quality/tests/quality_hardening",
+        ),
+    )
+
+
+def _quality_allure_audit(context: CommandContext) -> ProcessSpec:
+    return _python_spec(
+        "quality-hardening-evidence-audit",
+        "-m",
+        "tools.quality.tests.quality_hardening.allure_audit",
+        str(context.root / ".tmp/quality-hardening-allure-results"),
     )
 
 
@@ -160,12 +229,19 @@ def _local_runtime_evidence(context: CommandContext) -> ProcessSpec:
 
 
 def _clean_room_proof(context: CommandContext) -> ProcessSpec:
-    return _python_spec(
+    # Each checkout has five sequential commands with a 1,200-second leaf cap;
+    # the two checkouts run concurrently. Keep one bounded minute for setup,
+    # manifests, compaction, and the supervisor handshake.
+    return ProcessSpec(
         "clean-room-proof",
-        "-m",
-        "tools.local_execution.clean_room",
-        str(context.root / ".tmp/local-first-clean-room"),
-        str(context.uv),
+        (
+            sys.executable,
+            "-m",
+            "tools.local_execution.clean_room",
+            str(context.root / ".tmp/local-first-clean-room"),
+            str(context.uv),
+        ),
+        timeout_seconds=6_060,
     )
 
 
@@ -243,7 +319,12 @@ def check_fast(context: CommandContext, runner: ProcessRunner) -> int:
     return run_specs(
         context,
         runner,
-        (_repo_policy(), _architecture(), _local_execution_tests()),
+        (
+            _repo_policy(),
+            _architecture(),
+            _ruff_check(),
+            _local_execution_tests(),
+        ),
         fail_fast=True,
     )
 
@@ -292,6 +373,24 @@ def verify(context: CommandContext, runner: ProcessRunner) -> int:
     if check(context, runner) != 0:
         print("engineering_check=FAIL evidence_capture=NOT_RUN report_render=NOT_RUN")
         return 1
+    bundle_evidence = run_specs(
+        context,
+        runner,
+        (_bundle_tests(), _bundle_smoke()),
+        fail_fast=True,
+    )
+    if bundle_evidence != 0:
+        print("engineering_check=PASS bundle_integrity=FAIL evidence_capture=NOT_RUN")
+        return 1
+    quality_evidence = run_specs(
+        context,
+        runner,
+        (_quality_allure(context), _quality_allure_audit(context)),
+        fail_fast=True,
+    )
+    if quality_evidence != 0:
+        print("engineering_check=PASS evidence_capture=FAIL report_render=NOT_RUN")
+        return 1
     reproducibility = run_specs(
         context, runner, (_clean_room_proof(context),), fail_fast=True
     )
@@ -318,12 +417,27 @@ def verify(context: CommandContext, runner: ProcessRunner) -> int:
     return 0
 
 
+def quality_advisory(context: CommandContext, runner: ProcessRunner) -> int:
+    return run_specs(
+        context,
+        runner,
+        (_source_policy(), _test_architecture_policy()),
+        fail_fast=False,
+    )
+
+
 def diagnose(context: CommandContext, runner: ProcessRunner) -> int:
     doctor_result = doctor_command(context.root, context.profile, context.uv)
     diagnostics = run_specs(
         context,
         runner,
-        (_repo_policy(), _architecture(), _uv_lock(context), _state_check()),
+        (
+            _repo_policy(),
+            _architecture(),
+            _ruff_check(),
+            _uv_lock(context),
+            _state_check(),
+        ),
         fail_fast=False,
     )
     failed = doctor_result != 0 or diagnostics != 0

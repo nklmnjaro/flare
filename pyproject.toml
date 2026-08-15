@@ -11,7 +11,9 @@ dependencies = [
 [dependency-groups]
 dev = [
   "allure-pytest==2.16.0",
+  "gitlint==0.19.1",
   "mypy==2.3.0",
+  "pre-commit==4.6.0",
   "pytest==9.1.1",
   "pytest-xdist==3.8.0",
   "ruff==0.16.1",
@@ -23,10 +25,24 @@ package = false
 required-version = "==0.12.3"
 
 [tool.ruff]
+exclude = [
+  ".cache/**",
+  ".flare/**",
+  ".tmp/**",
+  ".venv/**",
+  "**/.mypy_cache/**",
+  "**/.pytest_cache/**",
+  "**/.ruff_cache/**",
+  "**/__pycache__/**",
+  "**/*.pyc",
+]
 target-version = "py314"
 
 [tool.ruff.lint]
-extend-select = ["UP"]
+extend-select = ["E501", "UP"]
+
+[tool.flare.quality]
+max-callable-lines = 80
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"

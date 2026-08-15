@@ -4,6 +4,7 @@ import allure
 
 from tools.quality.tests.local_execution.bootstrap_scenarios import (
     verify_bootstrap_and_repeat,
+    verify_bootstrap_lock_safety,
     verify_bootstrap_path_safety,
     verify_concurrent_bootstrap,
     verify_corruption_recovery,
@@ -57,3 +58,9 @@ class TestBootstrapContract:
         self, local_execution_repository: LocalExecutionFixture
     ) -> None:
         verify_bootstrap_path_safety(local_execution_repository)
+
+    @allure.title("[LF-N36] Reject symlink and hardlink bootstrap locks")
+    def test_lock_safety(
+        self, local_execution_repository: LocalExecutionFixture
+    ) -> None:
+        verify_bootstrap_lock_safety(local_execution_repository)

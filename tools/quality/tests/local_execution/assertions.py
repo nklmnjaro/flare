@@ -25,7 +25,7 @@ def assert_not_contains(needle: str, value: str, label: str) -> None:
 
 def assert_raises[E: BaseException](
     exception: type[E],
-    operation: Callable[[], None],
+    operation: Callable[[], object],
     label: str,
 ) -> E:
     try:

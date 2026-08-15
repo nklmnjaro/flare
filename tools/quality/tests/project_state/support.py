@@ -142,7 +142,14 @@ def materialize_current_candidate(target: Path) -> ValidationObservation:
             "canonical-candidate@flare.invalid",
         )
         _git_text(target, "add", "-A")
-        _git_text(target, "commit", "-q", "-m", "test: materialize exact candidate")
+        _git_text(
+            target,
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "test: materialize exact candidate",
+        )
         candidate = _git_text(target, "rev-parse", "HEAD")
         materialized = build_git_source_manifest(target)
         attach_json(

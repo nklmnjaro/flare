@@ -9,6 +9,14 @@ MVP promise:
 > failure can be understood without manually switching between CI, reports,
 > and fragmented logs.
 
+Flare is an independently deployable, provider-neutral evidence add-on. It
+connects to CI/CD and release systems without replacing their orchestration or
+owning their lifecycle. Provider adapters stay outside the canonical core.
+
+See
+[`FLARE-PROVIDER-NEUTRAL-EVIDENCE-INTEGRATION-001`](docs/decisions/FLARE-PROVIDER-NEUTRAL-EVIDENCE-INTEGRATION-001.md)
+for the product integration boundary.
+
 Repository layout:
 
 ```text

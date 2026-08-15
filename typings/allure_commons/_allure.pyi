@@ -1,6 +1,7 @@
 # Narrow augmentation for allure-python-commons/allure-pytest 2.16.0.
 # Their published typing omits the decorator/dynamic APIs used below and leaves
-# allure.attach as Any under mypy 1.19.1. The step overload is repeated because
+# allure.attach insufficiently typed for strict checking. The step overload is
+# repeated because
 # a partial module stub shadows that module. Delete this file once upstream
 # strict typing covers exactly these public APIs, including attach.
 
@@ -33,6 +34,14 @@ def attach(
 ) -> None: ...
 
 class Dynamic:
+    @staticmethod
+    def title(test_title: str) -> None: ...
+    @staticmethod
+    def parent_suite(parent_suite_name: str) -> None: ...
+    @staticmethod
+    def suite(suite_name: str) -> None: ...
+    @staticmethod
+    def feature(*features: str) -> None: ...
     @staticmethod
     def label(label_type: str, *labels: str) -> None: ...
     @staticmethod

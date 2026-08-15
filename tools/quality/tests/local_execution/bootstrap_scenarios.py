@@ -1,3 +1,6 @@
+import os
+import shutil
+import stat
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -242,13 +245,53 @@ def verify_bootstrap_path_safety(repository: LocalExecutionFixture) -> None:
             repository.managed_python,
         )
 
-    error = assert_raises(EnvironmentError, run_symlink, "symlink escape bootstrap")
-    assert_contains("escapes", str(error), "symlink escape diagnostic")
-    environment.unlink()
+    recovered = bootstrap_environment(
+        repository.root,
+        repository.profile,
+        repository.uv,
+        repository.managed_python,
+    )
+    assert_true(recovered.passed, "hostile environment symlink recovery")
+    assert_true(external.is_dir(), "external environment target is untouched")
     rejected = repository.root / repository.profile.project_state / "rejected"
-    rejected.parent.mkdir(parents=True, exist_ok=True)
+    assert_true(
+        any(path.is_symlink() for path in rejected.iterdir()),
+        "hostile environment directory entry is quarantined",
+    )
+    shutil.rmtree(environment)
+    rejected.rename(rejected.with_name("rejected-safe"))
     rejected.symlink_to(external, target_is_directory=True)
     rejected_error = assert_raises(
         EnvironmentError, run_symlink, "rejected-state symlink escape"
     )
     assert_contains("escapes", str(rejected_error), "rejected symlink diagnostic")
+
+
+@scenario("LF-N36", "Reject symlink and hardlink bootstrap locks")
+def verify_bootstrap_lock_safety(repository: LocalExecutionFixture) -> None:
+    state = repository.root / repository.profile.project_state
+    state.mkdir(parents=True, exist_ok=True)
+    state.chmod(0o700)
+    victim = repository.root / "bootstrap-lock-canary"
+    victim.write_text("must-survive\n", encoding="ascii")
+    victim.chmod(0o644)
+    lock = state / "bootstrap.lock"
+
+    def bootstrap() -> None:
+        bootstrap_environment(
+            repository.root,
+            repository.profile,
+            repository.uv,
+            repository.managed_python,
+        )
+
+    lock.symlink_to(victim)
+    assert_raises(OSError, bootstrap, "bootstrap lock symlink")
+    assert_equal(victim.read_text(encoding="ascii"), "must-survive\n", "symlink bytes")
+    assert_equal(stat.S_IMODE(victim.stat().st_mode), 0o644, "symlink target mode")
+    lock.unlink()
+    os.link(victim, lock)
+    error = assert_raises(EnvironmentError, bootstrap, "bootstrap lock hardlink")
+    assert_contains("lock metadata", str(error), "bootstrap hardlink diagnostic")
+    assert_equal(victim.read_text(encoding="ascii"), "must-survive\n", "hardlink bytes")
+    assert_equal(stat.S_IMODE(victim.stat().st_mode), 0o644, "hardlink target mode")

@@ -8,6 +8,10 @@ const configuredPythonVersion = readFileSync(
 const hasLabel = (labels, name, value) =>
   labels.some((label) => label.name === name && label.value === value);
 
+const configuredScheduler =
+  `pytest-xdist ${process.env.STATE_TEST_WORKERS ?? "4"} workers, ` +
+  "worksteal distribution";
+
 export default {
   name: "Flare A.1 Coordination State",
   plugins: {
@@ -22,7 +26,7 @@ export default {
     "Contract baseline": "f7db10c0301a5693fdcce1e945040672188a2343",
     "Python target (configured)": configuredPythonVersion,
     "Scenario contract": "A1-N01 through A1-N32",
-    "Test scheduler (configured)": `pytest-xdist ${process.env.STATE_TEST_WORKERS ?? "4"} workers, worksteal distribution`,
+    "Test scheduler (configured)": configuredScheduler,
     "Validation pipeline": "bytes → strict JSON → JSON Schema → typed model → semantics → projection → CAS",
     "Evidence policy": "bounded attachments owned by the producing step or fixture",
   },

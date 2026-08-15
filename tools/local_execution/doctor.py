@@ -8,6 +8,7 @@ from pathlib import Path
 
 from tools.local_execution.environment import (
     EnvironmentError,
+    EnvironmentManifest,
     environment_marker_matches,
     observe_environment,
     validate_environment,
@@ -77,15 +78,33 @@ def _configuration_observations(
     uv_table = tool.get("uv") if isinstance(tool, dict) else None
     ruff_table = tool.get("ruff") if isinstance(tool, dict) else None
     mypy_table = tool.get("mypy") if isinstance(tool, dict) else None
+    version_parts = profile.python_version.split(".")
+    version_is_valid = (
+        len(version_parts) >= 2
+        and version_parts[0].isdigit()
+        and version_parts[1].isdigit()
+    )
+    python_range: str | None
+    ruff_target: str | None
+    mypy_target: str | None
+    if version_is_valid:
+        major, minor = int(version_parts[0]), int(version_parts[1])
+        python_range = f">={major}.{minor},<{major}.{minor + 1}"
+        ruff_target = f"py{major}{minor}"
+        mypy_target = f"{major}.{minor}"
+    else:
+        python_range = None
+        ruff_target = None
+        mypy_target = None
     aligned = (
         python_declared == profile.python_version
-        and requires == ">=3.14,<3.15"
+        and requires == python_range
         and isinstance(uv_table, dict)
         and uv_table.get("required-version") == f"=={profile.uv_version}"
         and isinstance(ruff_table, dict)
-        and ruff_table.get("target-version") == "py314"
+        and ruff_table.get("target-version") == ruff_target
         and isinstance(mypy_table, dict)
-        and mypy_table.get("python_version") == "3.14"
+        and mypy_table.get("python_version") == mypy_target
     )
     observations.append(
         Observation(
@@ -98,43 +117,40 @@ def _configuration_observations(
     return tuple(observations)
 
 
-def inspect_doctor(
-    root: Path,
+def _command_available(command: str, uv: Path) -> bool:
+    if command == "uv":
+        return uv.is_file() and os.access(uv, os.X_OK)
+    if command.startswith("/"):
+        return Path(command).is_file() and os.access(command, os.X_OK)
+    return shutil.which(command) is not None
+
+
+def _host_observations(
     profile: HostProfile,
     uv: Path,
-    python: Path,
-    *,
-    facts: PlatformFacts | None = None,
-    optional_path: str | None = None,
-) -> DoctorReport:
-    actual = detect_platform() if facts is None else facts
+    actual: PlatformFacts,
+) -> list[Observation]:
     host_matches = (
         actual.os == profile.os
         and actual.release_id == profile.os_release_id
         and actual.release_version == profile.os_release_version
         and actual.architecture == profile.architecture
     )
-    observations: list[Observation] = [
+    observations = [
         Observation(
             "host_profile",
             CheckStatus.PASS if host_matches else CheckStatus.FAIL,
             (
-                f"detected={actual.os}/{actual.release_id}-{actual.release_version}/{actual.architecture}; "
-                f"supported={profile.os}/{profile.os_release_id}-{profile.os_release_version}/{profile.architecture}"
+                f"detected={actual.os}/{actual.release_id}-"
+                f"{actual.release_version}/{actual.architecture}; "
+                f"supported={profile.os}/{profile.os_release_id}-"
+                f"{profile.os_release_version}/{profile.architecture}"
             ),
             True,
         )
     ]
     for command in profile.required_host_commands:
-        available = (
-            uv.is_file() and os.access(uv, os.X_OK)
-            if command == "uv"
-            else (
-                Path(command).is_file() and os.access(command, os.X_OK)
-                if command.startswith("/")
-                else shutil.which(command) is not None
-            )
-        )
+        available = _command_available(command, uv)
         observations.append(
             Observation(
                 f"host_command:{command}",
@@ -145,13 +161,16 @@ def inspect_doctor(
                 True,
             )
         )
-    observations.extend(_configuration_observations(root, profile))
+    return observations
+
+
+def _bootstrap_observations(profile: HostProfile) -> list[Observation]:
     configured_sources = tuple(
         name
         for name in profile.external_package_source_environment
         if os.environ.get(name)
     )
-    observations.append(
+    return [
         Observation(
             "package_source_configuration",
             CheckStatus.PASS,
@@ -161,20 +180,25 @@ def inspect_doctor(
                 else "uv default public source; no external source variables configured"
             ),
             False,
-        )
-    )
-    observations.append(
+        ),
         Observation(
             "bootstrap_integrity",
             CheckStatus.PASS,
             "authorities=" + ",".join(profile.integrity_authorities),
             True,
-        )
-    )
+        ),
+    ]
+
+
+def _environment_status(
+    root: Path,
+    profile: HostProfile,
+    uv: Path,
+    python: Path,
+) -> tuple[EnvironmentManifest | None, tuple[str, ...]]:
     environment_root = profile.path(root, profile.project_environment)
-    provenance_ok = _within(python, environment_root)
     try:
-        manifest = observe_environment(root, profile, python, uv)
+        manifest = observe_environment(root, profile, environment_root, uv)
         environment_errors = validate_environment(root, profile, manifest)
         if not environment_marker_matches(environment_root, manifest):
             environment_errors = (
@@ -182,9 +206,25 @@ def inspect_doctor(
                 "project environment marker is missing, corrupt, or stale",
             )
     except (EnvironmentError, OSError, TimeoutError) as error:
-        manifest = None
-        environment_errors = (str(error),)
-    observations.append(
+        return None, (str(error),)
+    return manifest, environment_errors
+
+
+def _environment_observations(
+    root: Path,
+    profile: HostProfile,
+    uv: Path,
+    python: Path,
+) -> list[Observation]:
+    environment_root = profile.path(root, profile.project_environment)
+    manifest, environment_errors = _environment_status(root, profile, uv, python)
+    project_python = environment_root / "bin/python"
+    provenance_ok = (
+        _within(project_python, environment_root)
+        and project_python.is_file()
+        and os.access(project_python, os.X_OK)
+    )
+    return [
         Observation(
             "python_provenance",
             CheckStatus.PASS if provenance_ok else CheckStatus.FAIL,
@@ -192,9 +232,7 @@ def inspect_doctor(
             if provenance_ok
             else "runtime resolves outside declared project-local roots",
             True,
-        )
-    )
-    observations.append(
+        ),
         Observation(
             "python_runtime",
             (
@@ -211,9 +249,7 @@ def inspect_doctor(
                 else "observed runtime unavailable"
             ),
             True,
-        )
-    )
-    observations.append(
+        ),
         Observation(
             "uv_identity",
             (
@@ -227,9 +263,7 @@ def inspect_doctor(
                 else "observed uv unavailable"
             ),
             True,
-        )
-    )
-    observations.append(
+        ),
         Observation(
             "project_environment",
             CheckStatus.PASS
@@ -237,22 +271,42 @@ def inspect_doctor(
             else CheckStatus.FAIL,
             "; ".join(environment_errors)
             if environment_errors
-            else f"manifest={manifest.sha256 if manifest is not None else 'unavailable'}",
+            else (
+                f"manifest={manifest.sha256 if manifest is not None else 'unavailable'}"
+            ),
             True,
-        )
-    )
+        ),
+    ]
+
+
+def _allure_observation(optional_path: str | None) -> Observation:
     search_path = os.environ.get("PATH", "") if optional_path is None else optional_path
     renderer = shutil.which("allure", path=search_path)
-    observations.append(
-        Observation(
-            "allure_renderer",
-            CheckStatus.PASS if renderer is not None else CheckStatus.OPTIONAL_MISSING,
-            "available"
-            if renderer is not None
-            else "HTML rendering is optional; raw evidence remains supported",
-            False,
-        )
+    return Observation(
+        "allure_renderer",
+        CheckStatus.PASS if renderer is not None else CheckStatus.OPTIONAL_MISSING,
+        "available"
+        if renderer is not None
+        else "HTML rendering is optional; raw evidence remains supported",
+        False,
     )
+
+
+def inspect_doctor(
+    root: Path,
+    profile: HostProfile,
+    uv: Path,
+    python: Path,
+    *,
+    facts: PlatformFacts | None = None,
+    optional_path: str | None = None,
+) -> DoctorReport:
+    actual = detect_platform() if facts is None else facts
+    observations = _host_observations(profile, uv, actual)
+    observations.extend(_configuration_observations(root, profile))
+    observations.extend(_bootstrap_observations(profile))
+    observations.extend(_environment_observations(root, profile, uv, python))
+    observations.append(_allure_observation(optional_path))
     return DoctorReport(profile.profile_id, tuple(observations))
 
 

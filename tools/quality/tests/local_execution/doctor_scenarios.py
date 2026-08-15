@@ -97,26 +97,19 @@ def verify_missing_required_doctor(repository: LocalExecutionFixture) -> None:
 
 @scenario("LF-N10", "Reject wrong Python and uv versions")
 def verify_wrong_versions_doctor(repository: LocalExecutionFixture) -> None:
-    fake_python = (
-        repository.root / repository.profile.project_environment / "bin/python"
-    )
-    fake_python.parent.mkdir(parents=True)
-    fake_python.write_text(
-        "#!/bin/sh\nprintf 'cpython\\n3.13.14\\n'\n",
-        encoding="utf-8",
-    )
-    fake_python.chmod(0o755)
+    python = _bootstrapped_python(repository)
+    wrong_profile = replace(repository.profile, python_implementation="pypy")
     wrong_uv = write_fake_uv(repository.root, name="uv-wrong", version="0.1.0")
     report = inspect_doctor(
         repository.root,
-        repository.profile,
+        wrong_profile,
         wrong_uv,
-        fake_python,
+        python,
         facts=_supported(repository),
     )
     rendered = report.render()
     assert_false(report.passed, "wrong runtime versions")
-    assert_contains("Python version mismatch", rendered, "doctor")
+    assert_contains("Python implementation mismatch", rendered, "doctor")
     assert_contains("uv version mismatch", rendered, "doctor")
 
 
@@ -142,11 +135,7 @@ def verify_doctor_read_only(
 ) -> None:
     python = _bootstrapped_python(repository)
     wrong_uv = write_fake_uv(repository.root, name="uv-wrong", version="0.0.0")
-    wrong_python = python.parent / "python-wrong"
-    wrong_python.write_text(
-        "#!/bin/sh\nprintf 'cpython\\n3.13.0\\n'\n", encoding="utf-8"
-    )
-    wrong_python.chmod(0o755)
+    wrong_runtime_profile = replace(repository.profile, python_implementation="pypy")
     missing_profile = replace(
         repository.profile,
         required_host_commands=(
@@ -184,9 +173,9 @@ def verify_doctor_read_only(
     )
     wrong_runtime = inspect_doctor(
         repository.root,
-        repository.profile,
+        wrong_runtime_profile,
         repository.uv,
-        wrong_python,
+        python,
         facts=_supported(repository),
     )
     monkeypatch.setenv("PATH", f"{poison}:/usr/bin:/bin")

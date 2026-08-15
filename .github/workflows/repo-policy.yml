@@ -19,7 +19,18 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - name: Install pinned uv
+        id: setup-uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.3"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          cache-local-path: .cache/uv
       - name: Repository policy
         env:
+          FLARE_HOST_UV: ${{ steps.setup-uv.outputs.uv-path }}
           PR_TITLE: ${{ github.event.pull_request.title || '' }}
-        run: make check-fast
+        run: |
+          make bootstrap
+          make check-fast

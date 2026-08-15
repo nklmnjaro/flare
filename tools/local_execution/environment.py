@@ -1,7 +1,11 @@
 import hashlib
 import json
+import os
+import platform
 import re
+import stat
 import subprocess
+import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +25,7 @@ CONFIG_PATHS = (
 )
 PACKAGE_NAME = re.compile(r"^([A-Za-z0-9_.-]+)==([^ ;]+)$")
 MANIFEST_NAME = ".flare-environment.json"
+MAX_SITE_ENTRIES = 50_000
 
 
 class EnvironmentError(RuntimeError):
@@ -123,41 +128,98 @@ def _required_packages(root: Path) -> tuple[InstalledPackage, ...]:
     return tuple(sorted(result))
 
 
-def _observe_python(python: Path) -> tuple[str, str, tuple[InstalledPackage, ...]]:
-    script = (
-        "import importlib.metadata, platform, sys\n"
-        "print(sys.implementation.name)\n"
-        "print(platform.python_version())\n"
-        "for d in sorted(importlib.metadata.distributions(), "
-        "key=lambda item: (item.metadata.get('Name') or '').lower()):\n"
-        " name=(d.metadata.get('Name') or '').strip()\n"
-        " if name: print(name + '\\t' + d.version)\n"
-    )
-    completed = subprocess.run(
-        [str(python), "-I", "-c", script],
-        capture_output=True,
-        check=False,
-        text=True,
-        timeout=30,
-    )
-    if completed.returncode != 0:
-        detail = completed.stderr.strip()[:400]
-        raise EnvironmentError(f"project Python observation failed: {detail}")
-    lines = completed.stdout.splitlines()
-    if len(lines) < 2:
-        raise EnvironmentError("project Python observation was incomplete")
+def _metadata_identity(path: Path) -> InstalledPackage:
+    metadata = path.lstat()
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or path.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_size > 1024 * 1024
+    ):
+        raise EnvironmentError("project package metadata is unsafe")
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as error:
+        raise EnvironmentError("project package metadata is unreadable") from error
+    values: dict[str, str] = {}
+    current: str | None = None
+    for line in lines:
+        if not line:
+            break
+        if line[:1] in {" ", "\t"}:
+            current = None
+            continue
+        key, separator, value = line.partition(":")
+        current = key if separator else None
+        if current not in {"Name", "Version"}:
+            continue
+        if current in values or not value.strip():
+            raise EnvironmentError("project package metadata identity is ambiguous")
+        values[current] = value.strip()
+    if set(values) != {"Name", "Version"}:
+        raise EnvironmentError("project package metadata identity is incomplete")
+    return InstalledPackage(_normalize_package_name(values["Name"]), values["Version"])
+
+
+def _observe_packages(
+    environment: Path, profile: HostProfile
+) -> tuple[InstalledPackage, ...]:
+    major, minor, *_ = profile.python_version.split(".")
+    relative = Path("lib") / f"python{major}.{minor}" / "site-packages"
+    current = environment
+    root_metadata = current.lstat()
+    if (
+        current.is_symlink()
+        or not stat.S_ISDIR(root_metadata.st_mode)
+        or root_metadata.st_uid != os.geteuid()
+    ):
+        raise EnvironmentError("project environment root is unsafe")
+    for component in relative.parts:
+        current /= component
+        metadata = current.lstat()
+        if (
+            current.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+        ):
+            raise EnvironmentError("project site-packages path is unsafe")
     packages: list[InstalledPackage] = []
-    for line in lines[2:]:
-        name, separator, version = line.partition("\t")
-        if not separator or not name or not version:
-            raise EnvironmentError("project package observation was malformed")
-        packages.append(InstalledPackage(_normalize_package_name(name), version))
-    return lines[0], lines[1], tuple(sorted(packages))
+    entries: list[os.DirEntry[str]] = []
+    with os.scandir(current) as iterator:
+        for entry in iterator:
+            entries.append(entry)
+            if len(entries) > MAX_SITE_ENTRIES:
+                raise EnvironmentError("project site-packages exceeds its entry bound")
+    try:
+        ordered = sorted(entries, key=lambda item: item.name.encode("utf-8"))
+    except UnicodeError as error:
+        raise EnvironmentError("project package path is not canonical UTF-8") from error
+    for entry in ordered:
+        if not entry.name.endswith(".dist-info"):
+            continue
+        if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+            raise EnvironmentError("project distribution metadata path is unsafe")
+        directory = Path(entry.path)
+        metadata = directory.lstat()
+        if metadata.st_uid != os.geteuid():
+            raise EnvironmentError("project distribution metadata owner is unsafe")
+        packages.append(_metadata_identity(directory / "METADATA"))
+    result = tuple(sorted(packages))
+    names = tuple(package.name for package in result)
+    if len(names) != len(set(names)):
+        raise EnvironmentError("project package identity is duplicated")
+    return result
 
 
 def observe_uv(uv: Path) -> str:
     completed = subprocess.run(
-        [str(uv), "--version"],
+        [str(uv), "--no-config", "--version"],
+        env={
+            "HOME": "/nonexistent",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "PATH": "/usr/bin:/bin",
+        },
         capture_output=True,
         check=False,
         text=True,
@@ -172,16 +234,15 @@ def observe_uv(uv: Path) -> str:
 def observe_environment(
     root: Path,
     profile: HostProfile,
-    python: Path,
+    environment: Path,
     uv: Path,
 ) -> EnvironmentManifest:
-    implementation, version, packages = _observe_python(python)
     return EnvironmentManifest(
         profile_id=profile.profile_id,
-        python_implementation=implementation,
-        python_version=version,
+        python_implementation=sys.implementation.name,
+        python_version=platform.python_version(),
         uv_version=observe_uv(uv),
-        packages=packages,
+        packages=_observe_packages(environment, profile),
         config_sha256=configuration_hashes(root),
     )
 
@@ -195,22 +256,26 @@ def validate_environment(
     if manifest.python_implementation != profile.python_implementation:
         errors.append(
             "Python implementation mismatch: "
-            f"expected={profile.python_implementation}, observed={manifest.python_implementation}"
+            f"expected={profile.python_implementation}, "
+            f"observed={manifest.python_implementation}"
         )
     if manifest.python_version != profile.python_version:
         errors.append(
-            f"Python version mismatch: expected={profile.python_version}, observed={manifest.python_version}"
+            f"Python version mismatch: expected={profile.python_version}, "
+            f"observed={manifest.python_version}"
         )
     if manifest.uv_version != profile.uv_version:
         errors.append(
-            f"uv version mismatch: expected={profile.uv_version}, observed={manifest.uv_version}"
+            f"uv version mismatch: expected={profile.uv_version}, "
+            f"observed={manifest.uv_version}"
         )
     observed = {package.name: package.version for package in manifest.packages}
     for required in _required_packages(root):
         actual = observed.get(required.name)
         if actual != required.version:
             errors.append(
-                f"package mismatch {required.name}: expected={required.version}, observed={actual or 'missing'}"
+                f"package mismatch {required.name}: expected={required.version}, "
+                f"observed={actual or 'missing'}"
             )
     if manifest.config_sha256 != configuration_hashes(root):
         errors.append(

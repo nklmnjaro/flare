@@ -1,7 +1,11 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 set -Eeuo pipefail
 IFS=$'\n\t'
+PATH=/usr/bin:/bin
+export PATH
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUNDLE_PYTHON="${FLARE_BUNDLE_PYTHON:-}"
 REPO="${HOME}/Projects/Flare/flare"
 PROFILE="linter"
 OUT=""
@@ -48,6 +52,10 @@ case "$PROFILE" in
   backend|frontend|qa1|qa2|platform|linter) ;;
   *) die "unknown profile: $PROFILE" ;;
 esac
+[[ "$BUILD_ID" =~ ^[A-Za-z0-9._-]+$ ]] || die "unsafe build id: $BUILD_ID"
+[[ -n "$BUNDLE_PYTHON" ]] || \
+  die "set FLARE_BUNDLE_PYTHON to an explicitly trusted interpreter"
+[[ -x "$BUNDLE_PYTHON" ]] || die "pinned bundle verifier Python is missing"
 
 REPO="$(cd "$REPO" && pwd)"
 FLARE="$REPO/.flare"
@@ -189,7 +197,7 @@ capture_postconditions() {
       printf 'command\t%s\t%s\n' "$cli" "$("$SOURCE_VENV/bin/$cli" --version 2>&1 | head -1)" >> "$dest"
     done
     if [[ "$PROFILE" == "linter" ]]; then
-      for cli in pylint pre-commit; do
+      for cli in pylint pre-commit gitlint; do
         [[ -x "$SOURCE_VENV/bin/$cli" ]] || die "source venv missing quality CLI: $cli"
         printf 'command\t%s\t%s\n' "$cli" "$("$SOURCE_VENV/bin/$cli" --version 2>&1 | head -1)" >> "$dest"
       done
@@ -208,7 +216,10 @@ capture_postconditions() {
         [[ -x "$RUNTIME/go/bin/go" ]] && printf 'command\tgo\t%s\n' "$("$RUNTIME/go/bin/go" version 2>&1)" >> "$dest"
         ;;
       node)
-        [[ -x "$RUNTIME/node/bin/node" ]] && printf 'command\tnode\t%s\n' "$("$RUNTIME/node/bin/node" --version 2>&1)" >> "$dest"
+        if [[ -x "$RUNTIME/node/bin/node" ]]; then
+          printf 'command\tnode\t%s\n' \
+            "$("$RUNTIME/node/bin/node" --version 2>&1)" >> "$dest"
+        fi
         ;;
       pnpm)
         local pn="$BIN/pnpm"
@@ -312,9 +323,11 @@ ARCH=$ARCH
 EOF
 
 cat > "$ROOT/restore.sh" <<'RESTORE'
-#!/usr/bin/env bash
+#!/usr/bin/bash
 set -Eeuo pipefail
 IFS=$'\n\t'
+PATH=/usr/bin:/bin
+export PATH
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROFILE="$(awk -F= '$1=="PROFILE"{print $2}' "$ROOT/profile.env")"
@@ -472,7 +485,7 @@ verify_postconditions() {
             [[ -x "$venv/bin/python" ]] || die "missing restored Python"
             actual="$("$venv/bin/python" --version 2>&1)"
             ;;
-          pytest|ruff|mypy|pylint|pre-commit|playwright)
+          pytest|ruff|mypy|pylint|pre-commit|gitlint|playwright)
             [[ -x "$venv/bin/$name" ]] || die "missing restored CLI: $name"
             actual="$("$venv/bin/$name" --version 2>&1 | head -1)"
             ;;
@@ -526,9 +539,10 @@ validate_profile_manifest() {
 write_state_activation() {
   local state="$1"
   cat > "$state/activate.sh" <<'ACT'
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Flare managed profile activation. Sourced file: never mutate caller shell options/traps.
 _STATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)" || return 1
+_REPO_ROOT="$(CDPATH= cd -- "$_STATE/../../../.." && pwd -P)" || return 1
 _PROFILE="PROFILE_PLACEHOLDER"
 _VENV="$_STATE/venv"
 
@@ -560,7 +574,7 @@ done < "$_STATE/profile-toolchain.tsv"
 while IFS=$'\t' read -r _POST_KIND _POST_NAME _POST_EXPECTED; do
   [[ -z "$_POST_KIND" || "$_POST_KIND" == \#* || "$_POST_KIND" != "command" ]] && continue
   case "$_POST_NAME" in
-    python|pytest|ruff|mypy|pylint|pre-commit|playwright)
+    python|pytest|ruff|mypy|pylint|pre-commit|gitlint|playwright)
       _POST_PATH="$_VENV/bin/$_POST_NAME"
       ;;
     *)
@@ -581,18 +595,14 @@ else
   unset VIRTUAL_ENV 2>/dev/null || true
   export PATH="$_STATE/bin:$PATH"
 fi
-export FLARE_REPO_ROOT="REPO_PLACEHOLDER"
+export FLARE_REPO_ROOT="$_REPO_ROOT"
 export PLAYWRIGHT_BROWSERS_PATH="$_STATE/playwright"
 echo "[flare] activated profile: $_PROFILE"
-unset _STATE _PROFILE _VENV _TOOL _VERSION _SOURCE _SHA _KIND _BUNDLED \
+unset _STATE _REPO_ROOT _PROFILE _VENV _TOOL _VERSION _SOURCE _SHA _KIND _BUNDLED \
   _MANIFEST_PROFILE _TOOL_PATH _POST_KIND _POST_NAME _POST_EXPECTED _POST_PATH
 return 0
 ACT
   sed -i "s/PROFILE_PLACEHOLDER/$PROFILE/g" "$state/activate.sh"
-  escaped_repo="${REPO//\\/\\\\}"
-  escaped_repo="${escaped_repo//&/\\&}"
-  escaped_repo="${escaped_repo//|/\\|}"
-  sed -i "s|REPO_PLACEHOLDER|$escaped_repo|g" "$state/activate.sh"
   chmod +x "$state/activate.sh"
 }
 
@@ -695,29 +705,18 @@ chmod +x "$ROOT/restore.sh"
 cat > "$ROOT/README.md" <<EOF
 # Flare dependency bundle — $PROFILE
 
-## Verify archive before extraction
+## Restore through the project-owned verifier
 
-The detached checksum file contains only the archive basename:
-
-\`\`\`bash
-sha256sum -c ${NAME}.tar.gz.sha256
-\`\`\`
-
-## Extract
+Keep the detached checksum beside the archive. From a verified Flare checkout:
 
 \`\`\`bash
-tar -xzf ${NAME}.tar.gz
-cd ${NAME}
-\`\`\`
-
-## Restore
-
-\`\`\`bash
-./restore.sh /path/to/flare
+tools/platform/dependency_bundles/restore_role_bundle.sh \\\
+  /path/to/${NAME}.tar.gz /path/to/flare
 source /path/to/flare/.flare/profiles/$PROFILE/current/activate.sh
 \`\`\`
 
-Restore verifies internal payload integrity before touching the target repo.
+The wrapper validates archive topology and complete payload integrity before
+extraction. Direct consumer execution of the embedded restore.sh is unsupported.
 
 It validates a versioned candidate state first and switches only the profile
 current pointer after complete validation. It never touches the project .venv path.
@@ -726,7 +725,7 @@ EOF
 # Internal manifest excludes itself by construction.
 (
   cd "$ROOT"
-  find . -type f ! -name SHA256SUMS -print0 \
+  find . -type f ! -path ./SHA256SUMS -print0 \
     | sort -z \
     | xargs -0 sha256sum > SHA256SUMS
 )
@@ -772,6 +771,9 @@ fi
 if tar -tvzf "$ARCHIVE" | grep -E '/home/|/Users/' >/dev/null; then
   die "local workstation identity/path leaked into tar metadata"
 fi
+
+"$BUNDLE_PYTHON" -I -B -S "$HERE/verify_bundle.py" "$ARCHIVE" >/dev/null || \
+  die "generated archive failed the canonical bundle contract"
 
 log "BUNDLE PASS: $ARCHIVE"
 log "sha256: $(awk '{print $1}' "$ARCHIVE.sha256")"

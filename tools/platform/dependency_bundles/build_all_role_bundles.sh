@@ -1,11 +1,18 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 set -Eeuo pipefail
 IFS=$'\n\t'
+PATH=/usr/bin:/bin
+export PATH
 
 REPO="${1:-$HOME/Projects/Flare/flare}"
 OUT="${2:-$HOME/Projects/Flare/dependency-dist}"
 MAX_MIB="${FLARE_ROLE_BUNDLE_MAX_MIB:-300}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+[[ -n "${FLARE_BUNDLE_PYTHON:-}" ]] || {
+  echo "[build-all][ERROR] run ./flare bootstrap, then set FLARE_BUNDLE_PYTHON to the admitted interpreter" >&2
+  exit 1
+}
 
 mkdir -p "$OUT"
 
