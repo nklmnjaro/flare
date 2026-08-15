@@ -1,0 +1,31 @@
+minimum_pre_commit_version: "4.6.0"
+
+default_language_version:
+  python: python3.14
+
+fail_fast: false
+
+repos:
+  - repo: local
+    hooks:
+      - id: project-check-fast
+        name: Canonical fast project check
+        entry: ./flare check-fast
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      - id: commit-message
+        name: Conventional Commit contract
+        entry: ./flare commit-msg
+        language: system
+        stages: [commit-msg]
+
+      - id: project-check
+        name: Canonical medium project check
+        entry: ./flare check
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

@@ -1,3 +1,4 @@
+<!-- flare-bootstrap-managed: v1 -->
 ## Problem
 
 <!-- What verified problem does this PR solve? -->
@@ -6,9 +7,9 @@
 
 <!-- Reproduction, issue, contract, benchmark, runtime evidence. -->
 
-## Scope
+## Smallest correct scope
 
-<!-- Smallest correct change. -->
+<!-- Why is this the smallest sufficient change? -->
 
 ## Rejected alternatives
 
@@ -18,35 +19,36 @@
 
 - [ ] No contract impact
 - [ ] Contract impact documented and tested
-- [ ] ADR/RFC updated where required
+- [ ] ADR / Product Decision updated where required
 
 ## Failure modes
 
-<!-- timeout / retry / backpressure / cancellation / partial failure / rollback -->
+<!-- timeout / retry / cancellation / backpressure / partial failure / shutdown -->
 
 ## Security
 
 - [ ] No new sensitive-data path
-- [ ] Redaction / auth / size limits tested where applicable
+- [ ] Redaction/auth/limits covered where applicable
 
-## Tests and checks
+## Checks
 
 ```text
-<exact commands + PASS/FAIL>
+<exact commands and PASS/FAIL>
 ```
 
-## Rule weakening
+## Quality-ratchet check
 
-- [ ] No skip / ignore / timeout inflation / retry weakening / coverage decrease
-- [ ] Exception documented with owner + expiry + compensating control
+- [ ] No permanent skip / retry-until-green / blanket ignore
+- [ ] New defect class has regression protection
+- [ ] Rule weakening, if any, has owner + reason + expiry
 
 ## Rollback
 
-<!-- How do we back this out safely? -->
+<!-- How is this change removed safely? -->
 
 ## Author self-review
 
 - [ ] I can explain every non-trivial part.
 - [ ] I tried to remove an abstraction/dependency/state.
 - [ ] Negative path is tested.
-- [ ] Documentation is not relying on chat-only knowledge.
+- [ ] Critical knowledge is in repository state, not only chat.

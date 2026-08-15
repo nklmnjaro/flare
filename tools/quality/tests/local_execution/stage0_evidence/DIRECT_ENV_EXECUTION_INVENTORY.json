@@ -1,0 +1,31 @@
+{
+  "mechanical_scan": "UTF-8 repository files outside generated/runtime roots",
+  "occurrences": [
+    {
+      "classification": "post-admission Stage-1 interpreter selected under shared lock",
+      "column": 33,
+      "line": 466,
+      "path": "tools/local_execution/admission_cli.py",
+      "public_bypass": false,
+      "text": "    python = str(SOURCE_ROOT / \".venv/bin/python\")"
+    },
+    {
+      "classification": "documentation for an explicitly supplied admitted bundle interpreter",
+      "column": 2,
+      "line": 54,
+      "path": "tools/platform/dependency_bundles/README.md",
+      "public_bypass": false,
+      "text": "`.venv/bin/python` fallback. After an admitted bootstrap, select the admitted"
+    },
+    {
+      "classification": "regression fixture asserting candidate script relocation",
+      "column": 33,
+      "line": 945,
+      "path": "tools/quality/tests/local_execution/admission_scenarios.py",
+      "public_bypass": false,
+      "text": "    script = repository.root / \".venv/bin/fixture-tool\""
+    }
+  ],
+  "public_bypass_count": 0,
+  "schema_version": "1.0"
+}

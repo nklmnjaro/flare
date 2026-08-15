@@ -1,0 +1,21 @@
+[general]
+ignore = T3,T5,B5,B6,M1
+
+[title-match-regex]
+regex = ^(feat|fix|docs|style|refactor|test|chore|ci|build|perf|revert)(\([a-z0-9-]+\))?: .+$
+
+[title-max-length]
+line-length = 72
+
+[body-max-line-length]
+line-length = 72
+
+[body-first-line-empty]
+
+[title-trailing-whitespace]
+
+[body-trailing-whitespace]
+
+[title-hard-tab]
+
+[body-hard-tab]

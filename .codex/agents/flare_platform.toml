@@ -1,0 +1,25 @@
+name = "flare_platform"
+description = "Bounded Flare platform/repository implementation worker."
+sandbox_mode = "workspace-write"
+
+developer_instructions = '''
+Implement only the accepted Change scope.
+
+Before editing:
+- read root AGENTS.md;
+- derive exact Git HEAD/status;
+- read the exact accepted Change/Iteration Contract and applicable ADRs;
+- challenge assumptions and scope.
+
+For FLARE-TRACK-A1-COORDINATION-STATE-001 specifically:
+- implement only the smallest coordination-state contract proof;
+- do not implement A.2 HANDOFF;
+- do not implement generic aggregation/orchestration;
+- do not implement custom agent/worktree/thread management;
+- do not persist transient Codex runtime identifiers.
+
+Prefer simple standard-library/native mechanisms.
+Run targeted checks while context is hot.
+Before handoff, run applicable canonical fast checks.
+Produce a clean reviewable Git diff/commit and exact evidence.
+'''

@@ -1,0 +1,512 @@
+#!/bin/sh
+set -eu
+umask 077
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
+
+case "$0" in
+    */*) SCRIPT_DIRECTORY=${0%/*} ;;
+    *) SCRIPT_DIRECTORY=. ;;
+esac
+ROOT=$(CDPATH= cd -- "$SCRIPT_DIRECTORY" && pwd -P)
+PROFILE="$ROOT/tools/local_execution/host_profile.toml"
+
+# Host Python and package state are explicitly outside the Stage-0 trust root.
+unset VIRTUAL_ENV PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONUSERBASE
+unset BASH_ENV ENV SHELLOPTS
+unset PYTHONBREAKPOINT PYTHONHASHSEED PYTHONINSPECT PYTHONNOUSERSITE
+unset PYTHONOPTIMIZE PYTHONPYCACHEPREFIX PYTHONSAFEPATH PYTHONWARNINGS
+unset PIP_CONFIG_FILE PIP_INDEX_URL PIP_TRUSTED_HOST
+unset UV_DEFAULT_INDEX UV_FIND_LINKS UV_INDEX UV_INDEX_STRATEGY UV_INSECURE_HOST
+unset UV_PYTHON_DOWNLOADS_JSON_URL UV_PYTHON_INSTALL_MIRROR
+
+run_uv() {
+    /usr/bin/env -i \
+        HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/bin:/bin \
+        UV_CACHE_DIR="$ROOT/.cache/uv" \
+        UV_PYTHON_INSTALL_DIR="$STATE/python" \
+        "$UV" "$@"
+}
+
+profile_value() {
+    /usr/bin/awk -F ' = ' -v key="$1" '
+        $1 == key {
+            value = $2
+            gsub(/^"|"$/, "", value)
+            print value
+            exit
+        }
+    ' "$PROFILE"
+}
+
+profile_array_values() {
+    /usr/bin/awk -v key="$1" '
+        $0 ~ "^" key " = \\[" { reading=1; next }
+        reading && /^]/ { exit }
+        reading {
+            value=$0
+            gsub(/[\",]/, "", value)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+            if (length(value)) print value
+        }
+    ' "$PROFILE"
+}
+
+fail() {
+    printf '%s\n' "local-execution: $1" >&2
+    exit 1
+}
+
+usage() {
+    printf '%s\n' \
+        'usage: ./flare <capability>' \
+        '' \
+        'capabilities:' \
+        '  doctor' \
+        '  bootstrap' \
+        '  check-fast' \
+        '  check' \
+        '  verify' \
+        '  quality-advisory' \
+        '  diagnose'
+}
+
+effective_uid() {
+    /usr/bin/awk '$1 == "Uid:" { print $3; exit }' /proc/self/status
+}
+
+safe_owned_file() {
+    file=$1
+    required_mode=$2
+    [ -f "$file" ] && [ ! -L "$file" ] || return 1
+    metadata=$(/usr/bin/stat -c '%u %a %h %f' "$file") || return 1
+    set -- $metadata
+    [ "$1" = "$(effective_uid)" ] && [ "$2" = "$required_mode" ] && \
+        [ "$3" = 1 ] && [ $((0x$4 & 0xF000)) -eq 32768 ]
+}
+
+select_explicit_uv() {
+    candidate=${FLARE_HOST_UV:-}
+    [ -n "$candidate" ] || \
+        fail "set FLARE_HOST_UV to an explicitly selected verified uv==$UV_VERSION"
+    case "$candidate" in /*) ;; *) fail "FLARE_HOST_UV must be an absolute path" ;; esac
+    resolved=$(/usr/bin/realpath -e -- "$candidate") || \
+        fail "FLARE_HOST_UV does not resolve to an executable"
+    [ -f "$resolved" ] && [ -x "$resolved" ] || \
+        fail "FLARE_HOST_UV is not a regular executable"
+    metadata=$(/usr/bin/stat -Lc '%u %a %F' "$resolved") || \
+        fail "cannot inspect FLARE_HOST_UV"
+    owner=${metadata%% *}
+    remainder=${metadata#* }
+    mode=${remainder%% *}
+    kind=${remainder#* }
+    current_uid=$(effective_uid)
+    [ "$owner" = 0 ] || [ "$owner" = "$current_uid" ] || \
+        fail "FLARE_HOST_UV has a foreign owner"
+    [ "$kind" = "regular file" ] && [ $((0$mode & 18)) -eq 0 ] || \
+        fail "FLARE_HOST_UV metadata is unsafe"
+    UV=$resolved
+}
+
+safe_managed_python() {
+    candidate=$1
+    resolved=$(/usr/bin/realpath -e -- "$candidate") || return 1
+    [ ! -L "$STATE/python" ] || return 1
+    managed_root=$(/usr/bin/realpath -e -- "$STATE/python") || return 1
+    case "$managed_root" in "$STATE"/*) ;; *) return 1 ;; esac
+    case "$resolved" in
+        "$managed_root"/*) ;;
+        *) return 1 ;;
+    esac
+    [ -f "$resolved" ] && [ -x "$resolved" ] || return 1
+    metadata=$(/usr/bin/stat -Lc '%u %a %h %f' "$resolved") || return 1
+    owner=${metadata%% *}
+    remainder=${metadata#* }
+    mode=${remainder%% *}
+    remainder=${remainder#* }
+    links=${remainder%% *}
+    kind=${remainder#* }
+    current_uid=$(effective_uid)
+    [ "$owner" = 0 ] || [ "$owner" = "$current_uid" ] || return 1
+    [ "$links" = 1 ] && [ $((0x$kind & 0xF000)) -eq 32768 ] || return 1
+    [ $((0$mode & 18)) -eq 0 ] || return 1
+    MANAGED_PYTHON=$resolved
+}
+
+prepare_bootstrap_directory() {
+    directory=$1
+    [ ! -L "$directory" ] || fail "bootstrap directory is a symlink: $directory"
+    if [ ! -e "$directory" ]; then
+        if ! /usr/bin/mkdir "$directory" 2>/dev/null; then
+            [ -d "$directory" ] && [ ! -L "$directory" ] || \
+                fail "cannot create bootstrap directory: $directory"
+        fi
+    fi
+    [ -d "$directory" ] || fail "bootstrap path is not a directory: $directory"
+    resolved=$(/usr/bin/realpath -e -- "$directory") || \
+        fail "cannot resolve bootstrap directory: $directory"
+    case "$resolved" in
+        "$ROOT"/*) ;;
+        *) fail "bootstrap directory escapes the repository: $directory" ;;
+    esac
+    owner=$(/usr/bin/stat -c '%u' "$directory")
+    [ "$owner" = "$(effective_uid)" ] || \
+        fail "bootstrap directory has a foreign owner: $directory"
+    parent=${directory%/*}
+    [ "$parent" != "$directory" ] || parent=.
+    directory_device=$(/usr/bin/stat -c '%d' "$directory") || \
+        fail "cannot inspect bootstrap directory device: $directory"
+    parent_device=$(/usr/bin/stat -c '%d' "$parent") || \
+        fail "cannot inspect bootstrap parent device: $parent"
+    [ "$directory_device" = "$parent_device" ] || \
+        fail "bootstrap directory is a separate filesystem: $directory"
+    /usr/bin/chmod 700 "$directory"
+}
+
+require_confined_stage0_directory() {
+    directory=$1
+    parent=$2
+    [ -d "$directory" ] && [ ! -L "$directory" ] || \
+        fail "Stage-0 directory is unavailable or linked: $directory"
+    resolved=$(/usr/bin/realpath -e -- "$directory") || \
+        fail "cannot resolve Stage-0 directory: $directory"
+    [ "$resolved" = "$directory" ] || \
+        fail "Stage-0 directory escapes the repository: $directory"
+    metadata=$(/usr/bin/stat -c '%u %a %f %d' "$directory") || \
+        fail "cannot inspect Stage-0 directory: $directory"
+    set -- $metadata
+    [ "$1" = "$(effective_uid)" ] && [ "$2" = 700 ] && \
+        [ $((0x$3 & 0xF000)) -eq 16384 ] || \
+        fail "Stage-0 directory metadata is unsafe: $directory"
+    parent_device=$(/usr/bin/stat -c '%d' "$parent") || \
+        fail "cannot inspect Stage-0 parent: $parent"
+    [ "$4" = "$parent_device" ] || \
+        fail "Stage-0 directory is a separate filesystem: $directory"
+}
+
+validate_stage0_roots() {
+    require_confined_stage0_directory "$ROOT/.flare" "$ROOT"
+    require_confined_stage0_directory "$STATE" "$ROOT/.flare"
+    require_confined_stage0_directory "$STATE/python" "$STATE"
+}
+
+acquire_stage0_lock() {
+    lock_mode=$1
+    STAGE0_LOCK="$STATE/stage0-bootstrap.lock"
+    case "$lock_mode" in
+        exclusive)
+            if [ ! -e "$STAGE0_LOCK" ] && [ ! -L "$STAGE0_LOCK" ]; then
+                (
+                    set -C
+                    umask 077
+                    printf '%s\n' 'flare-stage0-bootstrap-lock-v1' > "$STAGE0_LOCK"
+                ) 2>/dev/null || true
+            fi
+            ;;
+        shared) ;;
+        *) fail "invalid Stage-0 lock mode: $lock_mode" ;;
+    esac
+    expected=$(/usr/bin/stat -c '%d %i %h %u %a %f' "$STAGE0_LOCK") || \
+        fail "Stage-0 bootstrap lock is unavailable"
+    set -- $expected
+    [ "$3" = 1 ] && [ "$4" = "$(effective_uid)" ] && [ "$5" = 600 ] && \
+        [ $((0x$6 & 0xF000)) -eq 32768 ] || \
+        fail "Stage-0 bootstrap lock metadata is unsafe"
+    exec 9<> "$STAGE0_LOCK" || fail "cannot open Stage-0 bootstrap lock"
+    opened=$(/usr/bin/stat -Lc '%d %i %h %u %a %f' "/proc/$$/fd/9") || \
+        fail "cannot inspect the open Stage-0 bootstrap lock"
+    current=$(/usr/bin/stat -c '%d %i %h %u %a %f' "$STAGE0_LOCK") || \
+        fail "Stage-0 bootstrap lock changed while opening"
+    [ "$opened" = "$expected" ] && [ "$current" = "$expected" ] || \
+        fail "Stage-0 bootstrap lock identity changed while opening"
+    case "$lock_mode" in
+        exclusive) /usr/bin/flock -x 9 ;;
+        shared) /usr/bin/flock -s 9 ;;
+    esac || fail "cannot acquire Stage-0 bootstrap lock"
+    current=$(/usr/bin/stat -c '%d %i %h %u %a %f' "$STAGE0_LOCK") || \
+        fail "Stage-0 bootstrap lock changed while waiting"
+    [ "$current" = "$expected" ] || \
+        fail "Stage-0 bootstrap lock identity changed while waiting"
+}
+
+normalize_managed_install() {
+    current_uid=$(effective_uid)
+    validate_managed_tree relaxed || \
+        fail "managed Python is unsafe to normalize"
+    /usr/bin/find "$STATE/python" -xdev -uid "$current_uid" -type d \
+        -exec /usr/bin/chmod go-w {} +
+    /usr/bin/find "$STATE/python" -xdev -uid "$current_uid" -type f \
+        -exec /usr/bin/chmod go-w {} +
+    validate_managed_tree strict || \
+        fail "managed Python contains writable shared state"
+}
+
+reset_managed_install() {
+    validate_managed_tree relaxed || \
+        fail "managed Python is unsafe to reconstruct in place"
+    managed_root=$(/usr/bin/realpath -e -- "$STATE/python") || \
+        fail "managed Python root is unavailable"
+    [ "$managed_root" = "$STATE/python" ] || \
+        fail "managed Python root identity is ambiguous"
+    /usr/bin/rm -rf -- "$managed_root" || \
+        fail "cannot remove the rejected managed Python tree"
+    [ ! -e "$STATE/python" ] && [ ! -L "$STATE/python" ] || \
+        fail "rejected managed Python tree survived removal"
+    prepare_bootstrap_directory "$STATE/python"
+}
+
+locate_managed_python() {
+    managed_root=$(/usr/bin/realpath -e -- "$STATE/python") || return 1
+    python_minor=${PYTHON_VERSION%.*}
+    # uv may publish root aliases; select only real patch-installation binaries.
+    candidate=$(/usr/bin/find "$managed_root" -xdev -mindepth 3 -maxdepth 3 \
+        -type f -name "python$python_minor" -print -quit) || return 1
+    [ -n "$candidate" ] || return 1
+    duplicate=$(/usr/bin/find "$managed_root" -xdev -mindepth 3 -maxdepth 3 \
+        -type f -name "python$python_minor" ! -samefile "$candidate" \
+        -print -quit) || return 1
+    [ -z "$duplicate" ] || return 1
+    relative=${candidate#"$managed_root/"}
+    installation=${relative%%/*}
+    case "$installation" in
+        ''|*[!A-Za-z0-9._+-]*) return 1 ;;
+    esac
+    case "$installation" in
+        "$PYTHON_IMPLEMENTATION-$PYTHON_VERSION-"?*) ;;
+        *) return 1 ;;
+    esac
+    [ "$relative" = "$installation/bin/python$python_minor" ] || return 1
+    safe_managed_python "$candidate"
+}
+
+validate_managed_tree() {
+    validation_mode=${1:-strict}
+    case "$validation_mode" in strict|relaxed) ;; *) return 1 ;; esac
+    [ ! -L "$STATE/python" ] || return 1
+    managed_root=$(/usr/bin/realpath -e -- "$STATE/python") || return 1
+    current_uid=$(effective_uid)
+    /usr/bin/env -i LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/bin:/bin \
+    /usr/bin/bash -o pipefail -c '
+        set -u
+        export LC_ALL=C
+        root=$1
+        current_uid=$2
+        validation_mode=$3
+        metadata=$(/usr/bin/stat -c "%u %a %f" "$root") || exit 1
+        read -r owner mode kind <<< "$metadata"
+        root_device=$(/usr/bin/stat -c "%d" "$root") || exit 1
+        [[ $owner == "$current_uid" || $owner == 0 ]] || exit 1
+        (( (16#$kind & 0xF000) == 0x4000 )) || exit 1
+        if [[ $validation_mode == strict ]]; then
+            (( (8#$mode & 022) == 0 )) || exit 1
+        fi
+        /usr/bin/find "$root" -xdev -mindepth 1 \
+            -printf "%D\0%U\0%m\0%y\0%n\0%s\0%P\0" |
+        {
+            count=0
+            total=0
+            while IFS= read -r -d "" device &&
+                IFS= read -r -d "" owner &&
+                IFS= read -r -d "" mode &&
+                IFS= read -r -d "" kind &&
+                IFS= read -r -d "" links &&
+                IFS= read -r -d "" size &&
+                IFS= read -r -d "" relative; do
+                ((count += 1))
+                ((count <= 50000)) || exit 1
+                ((${#relative} > 0 && ${#relative} <= 512)) || exit 1
+                [[ $device == "$root_device" ]] || exit 1
+                [[ $owner == "$current_uid" || $owner == 0 ]] || exit 1
+                case $kind in
+                    d)
+                        if [[ $validation_mode == strict ]]; then
+                            (( (8#$mode & 022) == 0 )) || exit 1
+                        fi
+                        ;;
+                    f)
+                        ((links == 1)) || exit 1
+                        if [[ $validation_mode == strict ]]; then
+                            (( (8#$mode & 022) == 0 )) || exit 1
+                        fi
+                        ((size <= 268435456)) || exit 1
+                        ((total += size))
+                        ((total <= 2147483648)) || exit 1
+                        ;;
+                    l)
+                        resolved=$(/usr/bin/realpath -e -- "$root/$relative") || exit 1
+                        [[ $resolved == "$root" || $resolved == "$root/"* ]] || exit 1
+                        ;;
+                    *) exit 1 ;;
+                esac
+            done
+        }
+    ' flare-stage0-tree "$managed_root" "$current_uid" "$validation_mode"
+}
+
+managed_tree_digest() {
+    validate_managed_tree strict || return 1
+    managed_root=$(/usr/bin/realpath -e -- "$STATE/python") || return 1
+    digest=$(/usr/bin/env -i LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/bin:/bin \
+        /usr/bin/bash -o pipefail -c '
+        export LC_ALL=C
+        /usr/bin/tar --sort=name --format=posix \
+            --one-file-system \
+            --mtime="UTC 1970-01-01" --owner=0 --group=0 --numeric-owner \
+            --pax-option=delete=atime,delete=ctime \
+            -C "$1" -cf - . | /usr/bin/sha256sum
+    ' flare-stage0-digest "$managed_root") || return 1
+    digest=${digest%% *}
+    [ "${#digest}" = 64 ] || return 1
+    case "$digest" in *[!0-9a-f]*) return 1 ;; esac
+    printf '%s\n' "$digest"
+}
+
+verify_stage0_digest() {
+    [ -d "$STATE" ] && [ ! -L "$STATE" ] || return 1
+    state_metadata=$(/usr/bin/stat -c '%u %a %F' "$STATE") || return 1
+    state_owner=${state_metadata%% *}
+    state_remainder=${state_metadata#* }
+    state_mode=${state_remainder%% *}
+    state_kind=${state_remainder#* }
+    [ "$state_owner" = "$(effective_uid)" ] && [ "$state_mode" = 700 ] && \
+        [ "$state_kind" = directory ] || return 1
+    digest_file="$STATE/stage0-python.sha256"
+    safe_owned_file "$digest_file" 600 || return 1
+    [ "$(/usr/bin/stat -c '%s' "$digest_file")" = 65 ] || return 1
+    IFS= read -r expected < "$digest_file" || return 1
+    [ "${#expected}" = 64 ] || return 1
+    case "$expected" in *[!0-9a-f]*) return 1 ;; esac
+    actual=$(managed_tree_digest) || return 1
+    [ "$actual" = "$expected" ]
+}
+
+publish_stage0_digest() {
+    actual=$(managed_tree_digest) || return 1
+    temporary=$(/usr/bin/mktemp "$STATE/.stage0-python.XXXXXX") || return 1
+    /usr/bin/chmod 600 "$temporary"
+    printf '%s\n' "$actual" > "$temporary"
+    /usr/bin/mv -f -- "$temporary" "$STATE/stage0-python.sha256"
+}
+
+[ -f "$PROFILE" ] || \
+    fail "missing host profile: tools/local_execution/host_profile.toml"
+
+COMMAND=${1:-help}
+if [ "$#" -gt 0 ]; then
+    shift
+fi
+case "$COMMAND" in
+    help|--help|-h) usage; exit 0 ;;
+esac
+
+PROFILE_ID=$(profile_value profile_id)
+EXPECTED_OS=$(profile_value os)
+EXPECTED_RELEASE_ID=$(profile_value os_release_id)
+EXPECTED_RELEASE_VERSION=$(profile_value os_release_version)
+EXPECTED_ARCH=$(profile_value architecture)
+PYTHON_IMPLEMENTATION=$(profile_value python_implementation)
+PYTHON_VERSION=$(profile_value python_version)
+UV_VERSION=$(profile_value uv_version)
+STATE="$ROOT/.flare/local-execution"
+
+ACTUAL_OS=$(/usr/bin/uname -s)
+ACTUAL_ARCH=$(/usr/bin/uname -m)
+[ "$ACTUAL_OS" = "$EXPECTED_OS" ] || \
+    fail "unsupported host for $PROFILE_ID: expected os=$EXPECTED_OS"
+[ "$ACTUAL_ARCH" = "$EXPECTED_ARCH" ] || \
+    fail "unsupported host for $PROFILE_ID: expected architecture=$EXPECTED_ARCH"
+
+[ -f /etc/os-release ] || \
+    fail "unsupported host for $PROFILE_ID: /etc/os-release is missing"
+ACTUAL_RELEASE_ID=$(
+    /usr/bin/awk -F= \
+        '$1 == "ID" { value=$2; gsub(/^"|"$/, "", value); print value; exit }' \
+        /etc/os-release
+)
+ACTUAL_RELEASE_VERSION=$(
+    /usr/bin/awk -F= \
+        '$1 == "VERSION_ID" { value=$2; gsub(/^"|"$/, "", value); print value; exit }' \
+        /etc/os-release
+)
+EXPECTED_RELEASE="$EXPECTED_RELEASE_ID-$EXPECTED_RELEASE_VERSION"
+ACTUAL_RELEASE="$ACTUAL_RELEASE_ID-$ACTUAL_RELEASE_VERSION"
+[ "$ACTUAL_RELEASE_ID" = "$EXPECTED_RELEASE_ID" ] || \
+    fail "unsupported host for $PROFILE_ID: expected release=$EXPECTED_RELEASE, observed=$ACTUAL_RELEASE"
+[ "$ACTUAL_RELEASE_VERSION" = "$EXPECTED_RELEASE_VERSION" ] || \
+    fail "unsupported host for $PROFILE_ID: expected release=$EXPECTED_RELEASE, observed=$ACTUAL_RELEASE"
+
+select_explicit_uv
+
+UV_OUTPUT=$(run_uv --version 2>/dev/null || true)
+case "$UV_OUTPUT" in
+    "uv $UV_VERSION"|"uv $UV_VERSION "*) ;;
+    *) fail "wrong uv identity/version: expected uv $UV_VERSION, observed ${UV_OUTPUT:-unavailable}" ;;
+esac
+
+for HOST_COMMAND in $(profile_array_values required_host_commands); do
+    case "$HOST_COMMAND" in
+        uv) HOST_PATH=$UV ;;
+        /*) HOST_PATH=$HOST_COMMAND ;;
+        *) fail "host profile contains a non-explicit command: $HOST_COMMAND" ;;
+    esac
+    [ -n "$HOST_PATH" ] && [ -x "$HOST_PATH" ] || \
+        fail "required host command is missing: $HOST_COMMAND"
+done
+
+case "$COMMAND" in
+    bootstrap)
+        prepare_bootstrap_directory "$ROOT/.flare"
+        prepare_bootstrap_directory "$STATE"
+        prepare_bootstrap_directory "$STATE/python"
+        prepare_bootstrap_directory "$ROOT/.cache"
+        prepare_bootstrap_directory "$ROOT/.cache/uv"
+        validate_stage0_roots
+        acquire_stage0_lock exclusive
+        if verify_stage0_digest && locate_managed_python; then
+            :
+        else
+            reset_managed_install
+            if ! run_uv --no-config python install "$PYTHON_VERSION" \
+                --install-dir "$STATE/python" --no-bin --reinstall; then
+                fail "verified uv failed to reconstruct pinned managed Python $PYTHON_VERSION"
+            fi
+            normalize_managed_install
+            publish_stage0_digest || \
+                fail "unable to publish the reconstructed Stage-0 Python identity"
+            verify_stage0_digest || fail "Stage-0 Python identity is not exact"
+            locate_managed_python || \
+                fail "uv did not provide one safe pinned managed Python $PYTHON_VERSION"
+        fi
+        cd "$ROOT"
+        exec "$MANAGED_PYTHON" -I -B -S \
+            "$ROOT/tools/local_execution/admission_cli.py" \
+            bootstrap --uv "$UV" --managed-python "$MANAGED_PYTHON" "$@"
+        ;;
+    doctor)
+        if [ ! -e "$ROOT/.venv" ] && [ ! -L "$ROOT/.venv" ] && \
+            [ ! -e "$STATE/environment-admission-v1.json" ] && \
+            [ ! -e "$STATE/environment-admission-v1.sha256" ]; then
+            printf '%s\n' \
+                "profile=$PROFILE_ID PASS" \
+                "uv=$UV_VERSION PASS host-provided" \
+                "host_prerequisites=PASS declared trust root available" \
+                "python_required=$PYTHON_VERSION" \
+                "project_environment=ABSENT REQUIRED" \
+                "doctor=FAIL" \
+                "next=./flare bootstrap"
+            exit 1
+        fi
+        ;;
+esac
+
+validate_stage0_roots
+acquire_stage0_lock shared
+verify_stage0_digest || \
+    fail "project environment is UNADMITTED; Stage-0 Python seal is invalid"
+locate_managed_python || \
+    fail "project environment is UNADMITTED; pinned managed Python is unavailable"
+
+cd "$ROOT"
+exec "$MANAGED_PYTHON" -I -B -S \
+    "$ROOT/tools/local_execution/admission_cli.py" \
+    launch --uv "$UV" --managed-python "$MANAGED_PYTHON" \
+    "$COMMAND" -- "$@"

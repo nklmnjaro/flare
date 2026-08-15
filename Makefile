@@ -1,10 +1,40 @@
-.PHONY: doctor check-fast check
+# flare-bootstrap-managed: v1
+
+.PHONY: doctor bootstrap check-fast check verify diagnose quality-advisory \
+	state-check state-static state-test state-allure state-allure-open
 
 doctor:
-	@python3 tools/quality/check_repo_policy.py --doctor
+	@./flare doctor
+
+bootstrap:
+	@./flare bootstrap
+
+state-check:
+	@./flare state-check
+
+state-static:
+	@./flare state-static
+
+state-test:
+	@./flare state-test
+
+state-allure:
+	@./flare state-allure
+
+state-allure-open:
+	@./flare state-allure-open
 
 check-fast:
-	@python3 tools/quality/check_repo_policy.py
+	@./flare check-fast
 
-check: check-fast
-	@echo "Full project gates are intentionally not defined until FLARE-000."
+check:
+	@./flare check
+
+verify:
+	@./flare verify
+
+diagnose:
+	@./flare diagnose
+
+quality-advisory:
+	@./flare quality-advisory

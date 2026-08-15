@@ -1,0 +1,31 @@
+{
+  "accepted_artifacts": [],
+  "accepted_source_baseline": {
+    "git_commit": "1a692c5ec98f335dd38211a0387c36e2e5db120f"
+  },
+  "active_changes": [
+    {
+      "change_id": "FLARE-EXECUTION-LOCAL-FIRST-001",
+      "contract_ref": "docs/engineering/changes/FLARE-EXECUTION-LOCAL-FIRST-001.md",
+      "required_artifact_ids": []
+    }
+  ],
+  "enforcement_matrix_ref": "docs/engineering/governance/rc2/FLARE_ENFORCEMENT_MATRIX_v0.2_20260807.md",
+  "integrator": {
+    "assignee_ref": "product_owner",
+    "assignment_ref": "docs/engineering/team/FLARE_INTEGRATOR_ASSIGNMENT_v1.json"
+  },
+  "next_action_change_ids": [
+    "FLARE-EXECUTION-LOCAL-FIRST-001"
+  ],
+  "open_blockers": [],
+  "open_decisions": {
+    "product": [],
+    "technical": []
+  },
+  "product_phase_ref": "docs/onboarding/START-HERE.md",
+  "production_gate_ref": "AGENTS.md",
+  "project_id": "flare",
+  "role_registry_ref": "tools/platform/team_dispatch/config.toml",
+  "schema_version": "1.0"
+}

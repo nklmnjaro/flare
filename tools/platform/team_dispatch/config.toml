@@ -1,0 +1,10 @@
+# Durable coordination registry retained at the accepted A.1 reference path.
+# Codex owns execution mechanics; this file does not define worker runtimes.
+
+[principals.product_owner]
+display = "Product Owner / Main Coordinator"
+status = "current"
+
+[roles.product_owner]
+display = "product_owner"
+principal_refs = ["product_owner"]
